@@ -29,18 +29,18 @@ DEFAULT_SETTINGS = {
     "pos_y":          -1,
 }
 
-# ── Colors — Hammurabi gold on dark stone ─────────────────────────────────────
+# ── Colors — Codex violet on deep space ───────────────────────────────────────
 C = {
-    "bg":     "#0d0a04",
-    "bg2":    "#1c1608",
-    "hdr":    "#261e0c",
-    "accent": "#d4a017",   # Hammurabi gold
-    "text":   "#f5e8c0",   # warm cream
-    "muted":  "#6b5a2a",
+    "bg":     "#0a0818",
+    "bg2":    "#141025",
+    "hdr":    "#1c1630",
+    "accent": "#a78bfa",   # Codex violet
+    "text":   "#e9e2ff",   # pale lavender
+    "muted":  "#6a5a8a",
     "green":  "#7ecf6e",
     "yellow": "#e8a020",
     "red":    "#e06050",
-    "bar":    "#2a2010",
+    "bar":    "#2a2040",
 }
 
 W_FULL    = 265
@@ -88,30 +88,37 @@ def read_cache() -> dict:
     return {}
 
 
+def _reset_dt(unix_ts: int | None) -> "datetime | None":
+    """Parse a Unix timestamp into an aware UTC datetime, or None if invalid."""
+    if unix_ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(unix_ts), tz=timezone.utc)
+    except (ValueError, TypeError, OSError, OverflowError):
+        return None
+
+
+def reset_passed(unix_ts: int | None) -> bool:
+    """True if the given Unix timestamp is in the past."""
+    dt = _reset_dt(unix_ts)
+    return dt is not None and dt < datetime.now(tz=timezone.utc)
+
+
 def fmt_reset(unix_ts: int | None, lang: str) -> str:
     """Format a Unix int timestamp into a human-readable countdown."""
     tr = i18n.STRINGS.get(lang, i18n.STRINGS["en"])
-    if not unix_ts:
+    dt = _reset_dt(unix_ts)
+    if dt is None:
         return "—"
-    try:
-        dt   = datetime.fromtimestamp(int(unix_ts), tz=timezone.utc)
-        diff = dt - datetime.now(tz=timezone.utc)
-        if diff.total_seconds() < 0:
-            ago = int(-diff.total_seconds() // 60)
-            if ago < 2:
-                return tr["reset_done"]
-            if ago < 60:
-                return f"↺ -{ago}m"
-            ah, am = divmod(ago, 60)
-            return f"↺ -{ah}h {am:02}m" if am else f"↺ -{ah}h"
-        mins = int(diff.total_seconds() // 60)
-        h, m = divmod(mins, 60)
-        if diff.total_seconds() < 86400:
-            return f"{h}h {m:02}m" if h else f"{m}m"
-        local = dt.astimezone()
-        return f"{tr['days'][local.weekday()]} {local.strftime('%H:%M')}"
-    except Exception:
-        return "—"
+    diff = dt - datetime.now(tz=timezone.utc)
+    if diff.total_seconds() < 0:
+        return tr["reset_done"]
+    mins = int(diff.total_seconds() // 60)
+    h, m = divmod(mins, 60)
+    if diff.total_seconds() < 86400:
+        return f"{h}h {m:02}m" if h else f"{m}m"
+    local = dt.astimezone()
+    return f"{tr['days'][local.weekday()]} {local.strftime('%H:%M')}"
 
 
 def bar_color(pct: float) -> str:
@@ -204,7 +211,7 @@ class CodexHamurabbi:
         lang    = self.cfg["lang"]
         W       = W_COMPACT if compact else W_FULL
 
-        self._title_var.set("◆ CHB" if compact else "◆ CodexHamurabbi")
+        self._title_var.set("◆ Codex" if compact else "◆ CodexHamurabbi")
 
         self._body = tk.Frame(self.root, bg=C["bg"],
                               padx=6 if compact else 10)
@@ -288,7 +295,9 @@ class CodexHamurabbi:
         lang  = self.cfg["lang"]
 
         for i, (key_pct, key_rst, icon, name_key) in enumerate(ROWS):
-            pct   = float(cache.get(key_pct, 0))
+            pct = float(cache.get(key_pct, 0))
+            if key_rst is not None and reset_passed(cache.get(key_rst)):
+                pct = 0.0  # stale cache after window rollover
             color = bar_color(pct)
             w     = self._rows_widgets[i]
 
