@@ -6,7 +6,7 @@ Double-click header to toggle compact mode. Right-click for settings.
 """
 
 import tkinter as tk
-import json, os, subprocess, sys, threading
+import json, os, time, subprocess, sys, threading
 from pathlib import Path
 from datetime import datetime, timezone
 import i18n
@@ -116,10 +116,11 @@ def pct_color(pct: float) -> str:
 # ── Main window ───────────────────────────────────────────────────────────────
 class CodexHamurabbi:
     def __init__(self):
-        self.cfg   = Settings()
-        self.root  = tk.Tk()
-        self._body = None
+        self.cfg         = Settings()
+        self.root        = tk.Tk()
+        self._body       = None
         self._rows_widgets = []
+        self._known_mtime = 0.0   # latest mtime seen across all session files
         self._build_window()
         self._build_content()
         self._fit_height()
@@ -283,8 +284,10 @@ class CodexHamurabbi:
             else:
                 rst_txt = fmt_reset(cache.get(key_rst), lang)
 
-            w["pct_var"].set(f"{pct:.0f}%")
-            w["pct_lbl"].config(fg=pct_color(pct))
+            # Show remaining % (like Codex settings), bar still fills with used %
+            remaining = max(0.0, 100.0 - pct)
+            w["pct_var"].set(f"{remaining:.0f}%")
+            w["pct_lbl"].config(fg=pct_color(pct))  # color by used (red = danger)
             w["rst_var"].set(rst_txt)
 
             if w["mode"] == "full":
@@ -325,10 +328,41 @@ class CodexHamurabbi:
         threading.Thread(target=run, daemon=True).start()
         self._upd_var.set("↻ …")
 
+    def _find_latest_session_mtime(self) -> float:
+        """Cheaply scan session dirs for the newest JSONL mtime."""
+        sessions_dir = CODEX_HOME / "sessions"
+        cutoff = time.time() - 8 * 24 * 3600
+        latest = 0.0
+        try:
+            for root, _dirs, files in os.walk(str(sessions_dir)):
+                for fname in files:
+                    if fname.endswith(".jsonl"):
+                        try:
+                            mt = os.path.getmtime(os.path.join(root, fname))
+                            if mt >= cutoff and mt > latest:
+                                latest = mt
+                        except OSError:
+                            pass
+        except Exception:
+            pass
+        return latest
+
+    def _watch_sessions(self):
+        """Every 5 s: re-fetch if any session file was modified since last fetch."""
+        try:
+            mt = self._find_latest_session_mtime()
+            if mt > self._known_mtime:
+                self._known_mtime = mt
+                self._bg_fetch()
+        except Exception:
+            pass
+        self.root.after(5_000, self._watch_sessions)
+
     def _schedule_bg_fetch(self):
+        """Initial fetch on startup, then hand off to file watcher."""
+        self._known_mtime = self._find_latest_session_mtime()
         self._bg_fetch()
-        ms = max(self.cfg["interval"] * 1000, 60_000)
-        self.root.after(ms, self._schedule_bg_fetch)
+        self.root.after(5_000, self._watch_sessions)
 
     # ── Drag ──────────────────────────────────────────────────────────────────
     def _drag_start(self, e): self._ox, self._oy = e.x, e.y

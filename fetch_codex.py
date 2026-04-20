@@ -1,45 +1,64 @@
 """
 CodexHamurabbi — fetch usage from Codex Desktop JSONL session files.
 Reads the most recent token_count event with rate_limits — no API call needed.
+Scans by file modification time so long-running sessions (started days ago)
+are always picked up correctly.
 """
-import json, glob, os
+import json, os, time
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 CODEX_HOME = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
 CACHE_FILE = CODEX_HOME / "hamurabbi_cache.json"
 
 
 def _latest_rate_limits() -> dict | None:
-    """Scan recent JSONL sessions newest-first, return the last rate_limits seen."""
-    now = datetime.now(tz=timezone.utc)
-    best = None  # (timestamp, rate_limits)
+    """
+    Walk all JSONL session files sorted by mtime (newest first).
+    Return the rate_limits from the token_count event with the latest timestamp.
+    """
+    sessions_dir = CODEX_HOME / "sessions"
+    if not sessions_dir.exists():
+        return None
 
-    for days_back in range(4):
-        d = now - timedelta(days=days_back)
-        pattern = str(CODEX_HOME / "sessions" /
-                      f"{d.year}" / f"{d.month:02d}" / f"{d.day:02d}" / "*.jsonl")
-        for fpath in sorted(glob.glob(pattern), reverse=True):
-            try:
-                with open(fpath, encoding="utf-8", errors="ignore") as fh:
-                    for line in fh:
-                        try:
-                            ev = json.loads(line)
-                            if ev.get("type") != "event_msg":
-                                continue
-                            p = ev.get("payload", {})
-                            rl = p.get("rate_limits")
-                            if rl and p.get("type") == "token_count":
-                                ts = ev.get("timestamp", "")
-                                if best is None or ts > best[0]:
-                                    best = (ts, rl)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+    cutoff = time.time() - 8 * 24 * 3600   # ignore files older than 8 days
 
-        if best and days_back == 0:
-            break   # found something today — stop early
+    # Collect all JSONL files with their mtime
+    all_files: list[tuple[float, str]] = []
+    for root, _dirs, files in os.walk(str(sessions_dir)):
+        for fname in files:
+            if fname.endswith(".jsonl"):
+                fpath = os.path.join(root, fname)
+                try:
+                    mt = os.path.getmtime(fpath)
+                    if mt >= cutoff:
+                        all_files.append((mt, fpath))
+                except OSError:
+                    pass
+
+    # Newest-modified first — read up to 30 files
+    all_files.sort(reverse=True)
+
+    best: tuple[str, dict] | None = None   # (iso_timestamp, rate_limits)
+
+    for _mt, fpath in all_files[:30]:
+        try:
+            with open(fpath, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    try:
+                        ev = json.loads(line)
+                        if ev.get("type") != "event_msg":
+                            continue
+                        p = ev.get("payload", {})
+                        rl = p.get("rate_limits")
+                        if rl and p.get("type") == "token_count":
+                            ts = ev.get("timestamp", "")
+                            if best is None or ts > best[0]:
+                                best = (ts, rl)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     return best[1] if best else None
 
