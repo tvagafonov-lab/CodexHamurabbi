@@ -21,14 +21,9 @@ STRINGS = {
         "menu_compact":  "→ Compact mode",
         "menu_full":     "→ Full mode",
         "menu_refresh":  "↺  Refresh now",
-        "menu_interval": "⏰  Interval",
         "menu_opacity":  "👁  Opacity",
         "menu_language": "🌐  Language",
         "menu_close":    "✕  Close",
-        "int_1m":   "1 min",
-        "int_5m":   "5 min",
-        "int_10m":  "10 min",
-        "int_30m":  "30 min",
         "days": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     },
 
@@ -40,14 +35,9 @@ STRINGS = {
         "menu_compact":  "→ Mode compact",
         "menu_full":     "→ Mode complet",
         "menu_refresh":  "↺  Actualiser",
-        "menu_interval": "⏰  Intervalle",
         "menu_opacity":  "👁  Opacité",
         "menu_language": "🌐  Langue",
         "menu_close":    "✕  Fermer",
-        "int_1m":   "1 min",
-        "int_5m":   "5 min",
-        "int_10m":  "10 min",
-        "int_30m":  "30 min",
         "days": ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
     },
 
@@ -59,14 +49,9 @@ STRINGS = {
         "menu_compact":  "→ Modo compacto",
         "menu_full":     "→ Modo completo",
         "menu_refresh":  "↺  Actualizar",
-        "menu_interval": "⏰  Intervalo",
         "menu_opacity":  "👁  Opacidad",
         "menu_language": "🌐  Idioma",
         "menu_close":    "✕  Cerrar",
-        "int_1m":   "1 min",
-        "int_5m":   "5 min",
-        "int_10m":  "10 min",
-        "int_30m":  "30 min",
         "days": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
     },
 
@@ -78,14 +63,9 @@ STRINGS = {
         "menu_compact":  "→ Компактный",
         "menu_full":     "→ Полный режим",
         "menu_refresh":  "↺  Обновить",
-        "menu_interval": "⏰  Интервал",
         "menu_opacity":  "👁  Прозрачность",
         "menu_language": "🌐  Язык",
         "menu_close":    "✕  Закрыть",
-        "int_1m":   "1 мин",
-        "int_5m":   "5 мин",
-        "int_10m":  "10 мин",
-        "int_30m":  "30 мин",
         "days": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
     },
 
@@ -98,14 +78,9 @@ STRINGS = {
         "menu_compact":  "→ Entono",       # small
         "menu_full":     "→ Enzijuvu",     # full
         "menu_refresh":  "↺  Ddamu",       # do again
-        "menu_interval": "⏰  Ebbanga",     # interval
         "menu_opacity":  "👁  Okwolesebwa", # visibility
         "menu_language": "🌐  Olulimi",     # language
         "menu_close":    "✕  Galawo",      # close
-        "int_1m":   "1 eddakiika",
-        "int_5m":   "5 eddakiika",
-        "int_10m":  "10 eddakiika",
-        "int_30m":  "30 eddakiika",
         "days": ["Bba", "Lbi", "Lsa", "Lna", "Lta", "Lmu", "Sab"],
         # Mon=Bbalaza, Tue=Lwakubiri, Wed=Lwakusatu,
         # Thu=Lwakuna, Fri=Lwakutaano, Sat=Lwamukaaga, Sun=Sabbiiti

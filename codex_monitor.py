@@ -385,16 +385,6 @@ class CodexHamurabbi:
         m.add_command(label=self._t("menu_refresh"), command=self._bg_fetch)
         m.add_separator()
 
-        # Interval submenu
-        sub = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
-                      activebackground=C["accent"], font=("Segoe UI", 9))
-        for v, key in [(60, "int_1m"), (300, "int_5m"),
-                       (600, "int_10m"), (1800, "int_30m")]:
-            mark = "✓  " if self.cfg["interval"] == v else "    "
-            sub.add_command(label=f"{mark}{self._t(key)}",
-                            command=lambda v=v: self._set_interval(v))
-        m.add_cascade(label=self._t("menu_interval"), menu=sub)
-
         # Opacity submenu
         sub2 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                        activebackground=C["accent"], font=("Segoe UI", 9))
@@ -417,7 +407,6 @@ class CodexHamurabbi:
         m.add_command(label=self._t("menu_close"), command=self.root.destroy)
         m.post(e.x_root, e.y_root)
 
-    def _set_interval(self, v): self.cfg["interval"] = v
     def _set_opacity(self, v):
         self.cfg["opacity"] = v
         self.root.attributes("-alpha", v)
