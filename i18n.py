@@ -18,8 +18,10 @@ STRINGS = {
         "row_week":      "Week",
         "row_credits":   "Credits",
         "reset_done":    "↺ reset",
-        "menu_compact":  "→ Compact mode",
-        "menu_full":     "→ Full mode",
+        "menu_compact":        "→ Compact mode",
+        "menu_full":           "→ Full mode",
+        "menu_show_used":      "% Show used",
+        "menu_show_remaining": "% Show remaining",
 "menu_opacity":  "👁  Opacity",
         "menu_language": "🌐  Language",
         "menu_close":    "✕  Close",
@@ -31,8 +33,10 @@ STRINGS = {
         "row_week":      "Semaine",
         "row_credits":   "Crédits",
         "reset_done":    "↺ réinit.",
-        "menu_compact":  "→ Mode compact",
-        "menu_full":     "→ Mode complet",
+        "menu_compact":        "→ Mode compact",
+        "menu_full":           "→ Mode complet",
+        "menu_show_used":      "% Afficher utilisé",
+        "menu_show_remaining": "% Afficher restant",
         "menu_opacity":  "👁  Opacité",
         "menu_language": "🌐  Langue",
         "menu_close":    "✕  Fermer",
@@ -44,8 +48,10 @@ STRINGS = {
         "row_week":      "Semana",
         "row_credits":   "Créditos",
         "reset_done":    "↺ reinic.",
-        "menu_compact":  "→ Modo compacto",
-        "menu_full":     "→ Modo completo",
+        "menu_compact":        "→ Modo compacto",
+        "menu_full":           "→ Modo completo",
+        "menu_show_used":      "% Mostrar usado",
+        "menu_show_remaining": "% Mostrar restante",
         "menu_opacity":  "👁  Opacidad",
         "menu_language": "🌐  Idioma",
         "menu_close":    "✕  Cerrar",
@@ -57,8 +63,10 @@ STRINGS = {
         "row_week":      "Неделя",
         "row_credits":   "Кредиты",
         "reset_done":    "↺ сброс",
-        "menu_compact":  "→ Компактный",
-        "menu_full":     "→ Полный режим",
+        "menu_compact":        "→ Компактный",
+        "menu_full":           "→ Полный режим",
+        "menu_show_used":      "% Показать использование",
+        "menu_show_remaining": "% Показать остаток",
         "menu_opacity":  "👁  Прозрачность",
         "menu_language": "🌐  Язык",
         "menu_close":    "✕  Закрыть",
@@ -71,8 +79,10 @@ STRINGS = {
         "row_week":      "Sabbiiti",       # week
         "row_credits":   "Ensimbi",        # money / credits
         "reset_done":    "↺ okuddamu",    # to do again
-        "menu_compact":  "→ Entono",       # small
-        "menu_full":     "→ Enzijuvu",     # full
+        "menu_compact":        "→ Entono",
+        "menu_full":           "→ Enzijuvu",
+        "menu_show_used":      "% Okozikozika",
+        "menu_show_remaining": "% Okusigalawo",
         "menu_opacity":  "👁  Okwolesebwa", # visibility
         "menu_language": "🌐  Olulimi",     # language
         "menu_close":    "✕  Galawo",      # close

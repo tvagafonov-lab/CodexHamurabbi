@@ -18,12 +18,12 @@ SETTINGS_FILE = CODEX_HOME / "hamurabbi_settings.json"
 FETCH_SCRIPT  = Path(__file__).parent / "fetch_codex.py"
 
 DEFAULT_SETTINGS = {
-    "opacity":  0.92,
-    "interval": 300,
-    "compact":  False,
-    "lang":     "en",
-    "pos_x":    -1,
-    "pos_y":    -1,
+    "opacity":        0.92,
+    "compact":        False,
+    "lang":           "en",
+    "show_remaining": True,    # True = remaining %, False = used %
+    "pos_x":          -1,
+    "pos_y":          -1,
 }
 
 # ── Colors — Hammurabi gold on dark stone ─────────────────────────────────────
@@ -277,10 +277,9 @@ class CodexHamurabbi:
             else:
                 rst_txt = fmt_reset(cache.get(key_rst), lang)
 
-            # Show remaining % (like Codex settings), bar still fills with used %
-            remaining = max(0.0, 100.0 - pct)
-            w["pct_var"].set(f"{remaining:.0f}%")
-            w["pct_lbl"].config(fg=pct_color(pct))  # color by used (red = danger)
+            display_pct = max(0.0, 100.0 - pct) if self.cfg["show_remaining"] else pct
+            w["pct_var"].set(f"{display_pct:.0f}%")
+            w["pct_lbl"].config(fg=pct_color(pct))  # color always by used (red = danger)
             w["rst_var"].set(rst_txt)
 
             if w["mode"] == "full":
@@ -375,6 +374,11 @@ class CodexHamurabbi:
 
         mode_key = "menu_full" if self.cfg["compact"] else "menu_compact"
         m.add_command(label=self._t(mode_key), command=self._toggle_compact)
+
+        pct_key = "menu_show_used" if self.cfg["show_remaining"] else "menu_show_remaining"
+        m.add_command(label=self._t(pct_key), command=self._toggle_show_remaining)
+        m.add_separator()
+
         # Opacity submenu
         sub2 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                        activebackground=C["accent"], font=("Segoe UI", 9))
@@ -396,6 +400,10 @@ class CodexHamurabbi:
         m.add_separator()
         m.add_command(label=self._t("menu_close"), command=self.root.destroy)
         m.post(e.x_root, e.y_root)
+
+    def _toggle_show_remaining(self):
+        self.cfg["show_remaining"] = not self.cfg["show_remaining"]
+        self._refresh_ui()
 
     def _set_opacity(self, v):
         self.cfg["opacity"] = v
