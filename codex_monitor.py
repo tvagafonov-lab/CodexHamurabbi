@@ -7,16 +7,16 @@ Double-click header to toggle compact mode. Right-click for settings.
 
 import tkinter as tk
 import ctypes
-import json, os, time, subprocess, sys, threading
+import json, os, time, threading
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import i18n
+import fetch_codex
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CODEX_HOME    = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
 CACHE_FILE    = CODEX_HOME / "hamurabbi_cache.json"
 SETTINGS_FILE = CODEX_HOME / "hamurabbi_settings.json"
-FETCH_SCRIPT  = Path(__file__).parent / "fetch_codex.py"
 
 DEFAULT_SETTINGS = {
     "opacity":        0.92,
@@ -472,11 +472,10 @@ class CodexHamurabbi:
     def _bg_fetch(self):
         def run():
             try:
-                subprocess.run([sys.executable, str(FETCH_SCRIPT)],
-                               timeout=20, capture_output=True)
-                self.root.after(300, self._refresh_ui)
+                fetch_codex.fetch_and_save()
             except Exception:
                 pass
+            self.root.after(0, self._refresh_ui)
         threading.Thread(target=run, daemon=True).start()
         self._upd_var.set("↻ …")
 
@@ -500,26 +499,27 @@ class CodexHamurabbi:
         return latest
 
     def _watch_sessions(self):
-        """Every 5 s: scan session files in a background thread; re-fetch if changed."""
+        """Every 2 s: scan session files in a background thread; re-fetch if changed.
+        In-process fetch runs in ~500 ms, so a 3 s cooldown is plenty."""
         def check():
             try:
                 mt = self._find_latest_session_mtime()
                 if mt > self._known_mtime:
                     now = time.time()
-                    if now - self._last_fetch_time >= 15:
+                    if now - self._last_fetch_time >= 3:
                         self._known_mtime     = mt
                         self._last_fetch_time = now
                         self.root.after(0, self._bg_fetch)
             except Exception:
                 pass
         threading.Thread(target=check, daemon=True).start()
-        self.root.after(5_000, self._watch_sessions)
+        self.root.after(2_000, self._watch_sessions)
 
     def _schedule_bg_fetch(self):
         """Initial fetch on startup, then hand off to file watcher."""
         self._known_mtime = self._find_latest_session_mtime()
         self._bg_fetch()
-        self.root.after(5_000, self._watch_sessions)
+        self.root.after(2_000, self._watch_sessions)
 
     # ── Drag ──────────────────────────────────────────────────────────────────
     def _drag_start(self, e): self._ox, self._oy = e.x, e.y
