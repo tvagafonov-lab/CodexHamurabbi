@@ -169,13 +169,6 @@ class CodexHamurabbi:
         x_lbl.bind("<Enter>",    lambda _: x_lbl.config(fg=C["red"]))
         x_lbl.bind("<Leave>",    lambda _: x_lbl.config(fg=C["muted"]))
 
-        btn = tk.Label(hdr, text="↺", bg=C["hdr"], fg=C["muted"],
-                       font=("Segoe UI", 11), cursor="hand2")
-        btn.pack(side="right", padx=1)
-        btn.bind("<Button-1>", lambda _: self._bg_fetch())
-        btn.bind("<Enter>",    lambda _: btn.config(fg=C["accent"]))
-        btn.bind("<Leave>",    lambda _: btn.config(fg=C["muted"]))
-
         self._upd_var = tk.StringVar(value="")
         tk.Label(hdr, textvariable=self._upd_var,
                  bg=C["hdr"], fg=C["muted"],
@@ -382,9 +375,6 @@ class CodexHamurabbi:
 
         mode_key = "menu_full" if self.cfg["compact"] else "menu_compact"
         m.add_command(label=self._t(mode_key), command=self._toggle_compact)
-        m.add_command(label=self._t("menu_refresh"), command=self._bg_fetch)
-        m.add_separator()
-
         # Opacity submenu
         sub2 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                        activebackground=C["accent"], font=("Segoe UI", 9))

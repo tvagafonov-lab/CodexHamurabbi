@@ -20,8 +20,7 @@ STRINGS = {
         "reset_done":    "↺ reset",
         "menu_compact":  "→ Compact mode",
         "menu_full":     "→ Full mode",
-        "menu_refresh":  "↺  Refresh now",
-        "menu_opacity":  "👁  Opacity",
+"menu_opacity":  "👁  Opacity",
         "menu_language": "🌐  Language",
         "menu_close":    "✕  Close",
         "days": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -34,7 +33,6 @@ STRINGS = {
         "reset_done":    "↺ réinit.",
         "menu_compact":  "→ Mode compact",
         "menu_full":     "→ Mode complet",
-        "menu_refresh":  "↺  Actualiser",
         "menu_opacity":  "👁  Opacité",
         "menu_language": "🌐  Langue",
         "menu_close":    "✕  Fermer",
@@ -48,7 +46,6 @@ STRINGS = {
         "reset_done":    "↺ reinic.",
         "menu_compact":  "→ Modo compacto",
         "menu_full":     "→ Modo completo",
-        "menu_refresh":  "↺  Actualizar",
         "menu_opacity":  "👁  Opacidad",
         "menu_language": "🌐  Idioma",
         "menu_close":    "✕  Cerrar",
@@ -62,7 +59,6 @@ STRINGS = {
         "reset_done":    "↺ сброс",
         "menu_compact":  "→ Компактный",
         "menu_full":     "→ Полный режим",
-        "menu_refresh":  "↺  Обновить",
         "menu_opacity":  "👁  Прозрачность",
         "menu_language": "🌐  Язык",
         "menu_close":    "✕  Закрыть",
@@ -77,7 +73,6 @@ STRINGS = {
         "reset_done":    "↺ okuddamu",    # to do again
         "menu_compact":  "→ Entono",       # small
         "menu_full":     "→ Enzijuvu",     # full
-        "menu_refresh":  "↺  Ddamu",       # do again
         "menu_opacity":  "👁  Okwolesebwa", # visibility
         "menu_language": "🌐  Olulimi",     # language
         "menu_close":    "✕  Galawo",      # close
