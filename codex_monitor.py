@@ -97,7 +97,13 @@ def fmt_reset(unix_ts: int | None, lang: str) -> str:
         dt   = datetime.fromtimestamp(int(unix_ts), tz=timezone.utc)
         diff = dt - datetime.now(tz=timezone.utc)
         if diff.total_seconds() < 0:
-            return tr["reset_done"]
+            ago = int(-diff.total_seconds() // 60)
+            if ago < 2:
+                return tr["reset_done"]
+            if ago < 60:
+                return f"↺ -{ago}m"
+            ah, am = divmod(ago, 60)
+            return f"↺ -{ah}h {am:02}m" if am else f"↺ -{ah}h"
         mins = int(diff.total_seconds() // 60)
         h, m = divmod(mins, 60)
         if diff.total_seconds() < 86400:
