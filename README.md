@@ -5,7 +5,7 @@
 
 Compact always-on-top overlay that shows your real-time **Codex usage stats** — 5-hour window, weekly limit, and extra credits — directly on your desktop.
 
-<img src="docs/screenshot-full.png" alt="Full mode" width="265"> <img src="docs/screenshot-compact.png" alt="Compact mode" width="165">
+<img src="docs/screenshot-full.png" alt="Full mode" width="265"> <img src="docs/screenshot-compact.png" alt="Compact mode" width="165"> <img src="docs/screenshot-dock.png" alt="Dock mode" width="130">
 
 ---
 
