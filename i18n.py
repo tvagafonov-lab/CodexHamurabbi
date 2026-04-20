@@ -1,6 +1,7 @@
 """
 CodexHamurabbi — Translations
 Add a language: copy any block, give it a new code, translate values.
+Keys must stay exactly as-is; only values get translated.
 """
 
 LANGUAGES = {
@@ -13,11 +14,10 @@ LANGUAGES = {
 
 STRINGS = {
     "en": {
-        "row_today":     "Today",
-        "row_week":      "7 days",
-        "row_sessions":  "Sessions",
-        "tokens_suffix": "tokens",
-        "sessions_sfx":  "sessions",
+        "row_5h":        "5h window",
+        "row_week":      "Week",
+        "row_credits":   "Credits",
+        "reset_done":    "↺ reset",
         "menu_compact":  "→ Compact mode",
         "menu_full":     "→ Full mode",
         "menu_refresh":  "↺  Refresh now",
@@ -29,13 +29,14 @@ STRINGS = {
         "int_5m":   "5 min",
         "int_10m":  "10 min",
         "int_30m":  "30 min",
+        "days": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
     },
+
     "fr": {
-        "row_today":     "Aujourd'hui",
-        "row_week":      "7 jours",
-        "row_sessions":  "Sessions",
-        "tokens_suffix": "tokens",
-        "sessions_sfx":  "sessions",
+        "row_5h":        "Fenêtre 5h",
+        "row_week":      "Semaine",
+        "row_credits":   "Crédits",
+        "reset_done":    "↺ réinit.",
         "menu_compact":  "→ Mode compact",
         "menu_full":     "→ Mode complet",
         "menu_refresh":  "↺  Actualiser",
@@ -47,13 +48,14 @@ STRINGS = {
         "int_5m":   "5 min",
         "int_10m":  "10 min",
         "int_30m":  "30 min",
+        "days": ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
     },
+
     "es": {
-        "row_today":     "Hoy",
-        "row_week":      "7 días",
-        "row_sessions":  "Sesiones",
-        "tokens_suffix": "tokens",
-        "sessions_sfx":  "sesiones",
+        "row_5h":        "Ventana 5h",
+        "row_week":      "Semana",
+        "row_credits":   "Créditos",
+        "reset_done":    "↺ reinic.",
         "menu_compact":  "→ Modo compacto",
         "menu_full":     "→ Modo completo",
         "menu_refresh":  "↺  Actualizar",
@@ -65,13 +67,14 @@ STRINGS = {
         "int_5m":   "5 min",
         "int_10m":  "10 min",
         "int_30m":  "30 min",
+        "days": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"],
     },
+
     "ru": {
-        "row_today":     "Сегодня",
-        "row_week":      "7 дней",
-        "row_sessions":  "Сессий",
-        "tokens_suffix": "токенов",
-        "sessions_sfx":  "сессий",
+        "row_5h":        "5ч окно",
+        "row_week":      "Неделя",
+        "row_credits":   "Кредиты",
+        "reset_done":    "↺ сброс",
         "menu_compact":  "→ Компактный",
         "menu_full":     "→ Полный режим",
         "menu_refresh":  "↺  Обновить",
@@ -83,29 +86,39 @@ STRINGS = {
         "int_5m":   "5 мин",
         "int_10m":  "10 мин",
         "int_30m":  "30 мин",
+        "days": ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"],
     },
+
     "lg": {
-        "row_today":     "Leero",
-        "row_week":      "Ennaku 7",
-        "row_sessions":  "Emikolo",
-        "tokens_suffix": "ebikomo",
-        "sessions_sfx":  "emikolo",
-        "menu_compact":  "→ Entono",
-        "menu_full":     "→ Enzijuvu",
-        "menu_refresh":  "↺  Ddamu",
-        "menu_interval": "⏰  Ebbanga",
-        "menu_opacity":  "👁  Okwolesebwa",
-        "menu_language": "🌐  Olulimi",
-        "menu_close":    "✕  Galawo",
+        # Luganda — spoken in Uganda
+        "row_5h":        "Saawa 5",        # 5 hours
+        "row_week":      "Sabbiiti",       # week
+        "row_credits":   "Ensimbi",        # money / credits
+        "reset_done":    "↺ okuddamu",    # to do again
+        "menu_compact":  "→ Entono",       # small
+        "menu_full":     "→ Enzijuvu",     # full
+        "menu_refresh":  "↺  Ddamu",       # do again
+        "menu_interval": "⏰  Ebbanga",     # interval
+        "menu_opacity":  "👁  Okwolesebwa", # visibility
+        "menu_language": "🌐  Olulimi",     # language
+        "menu_close":    "✕  Galawo",      # close
         "int_1m":   "1 eddakiika",
         "int_5m":   "5 eddakiika",
         "int_10m":  "10 eddakiika",
         "int_30m":  "30 eddakiika",
+        "days": ["Bba", "Lbi", "Lsa", "Lna", "Lta", "Lmu", "Sab"],
+        # Mon=Bbalaza, Tue=Lwakubiri, Wed=Lwakusatu,
+        # Thu=Lwakuna, Fri=Lwakutaano, Sat=Lwamukaaga, Sun=Sabbiiti
     },
 }
 
 
 def get(lang: str, key: str, **kwargs):
+    """
+    Return translated value for lang/key.
+    Falls back to English if key or lang is missing.
+    Supports .format(**kwargs) for strings with placeholders.
+    """
     val = (STRINGS.get(lang) or STRINGS["en"]).get(key)
     if val is None:
         val = STRINGS["en"].get(key, key)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CodexHamurabbi — Codex Desktop usage overlay for Windows.
-Reads from ~/.codex/state_5.sqlite — no auth, no API calls.
+Reads rate limits from ~/.codex/sessions JSONL — no auth, no API calls.
 Double-click header to toggle compact mode. Right-click for settings.
 """
 
@@ -43,12 +43,11 @@ C = {
 W_FULL    = 265
 W_COMPACT = 165
 
-# Row definitions: (value_key, sub_key, icon, i18n_key, row_type)
-# row_type: "bar" = progress bar + value, "text" = icon + value only
+# Row definitions: (pct_key, reset_key, icon, i18n_key)
 ROWS = [
-    ("today_pct",      "today_fmt",  "📅", "row_today",    "bar"),
-    ("week_pct",       "week_fmt",   "📆", "row_week",     "bar"),
-    ("today_sessions", None,         "🔀", "row_sessions", "text"),
+    ("fh_pct", "fh_reset", "⏱", "row_5h"),
+    ("wd_pct", "wd_reset", "📅", "row_week"),
+    ("cr_pct", None,       "💳", "row_credits"),
 ]
 
 
@@ -82,6 +81,26 @@ def read_cache() -> dict:
     return {}
 
 
+def fmt_reset(unix_ts: int | None, lang: str) -> str:
+    """Format a Unix int timestamp into a human-readable countdown."""
+    tr = i18n.STRINGS.get(lang, i18n.STRINGS["en"])
+    if not unix_ts:
+        return "—"
+    try:
+        dt   = datetime.fromtimestamp(int(unix_ts), tz=timezone.utc)
+        diff = dt - datetime.now(tz=timezone.utc)
+        if diff.total_seconds() < 0:
+            return tr["reset_done"]
+        mins = int(diff.total_seconds() // 60)
+        h, m = divmod(mins, 60)
+        if diff.total_seconds() < 86400:
+            return f"{h}h {m:02}m" if h else f"{m}m"
+        local = dt.astimezone()
+        return f"{tr['days'][local.weekday()]} {local.strftime('%H:%M')}"
+    except Exception:
+        return "—"
+
+
 def bar_color(pct: float) -> str:
     if pct >= 90: return C["red"]
     if pct >= 60: return C["yellow"]
@@ -110,7 +129,7 @@ class CodexHamurabbi:
     def _t(self, key: str, **kwargs) -> str:
         return i18n.get(self.cfg["lang"], key, **kwargs)
 
-    # ── Window ────────────────────────────────────────────────────────────────
+    # ── Window (built once) ───────────────────────────────────────────────────
     def _build_window(self):
         r = self.root
         r.title("CodexHamurabbi")
@@ -122,7 +141,7 @@ class CodexHamurabbi:
         W = W_COMPACT if self.cfg["compact"] else W_FULL
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
         x = self.cfg["pos_x"] if self.cfg["pos_x"] >= 0 else sw - W - 20
-        y = self.cfg["pos_y"] if self.cfg["pos_y"] >= 0 else sh - 220 - 60
+        y = self.cfg["pos_y"] if self.cfg["pos_y"] >= 0 else sh - 200 - 60
         r.geometry(f"{W}x200+{x}+{y}")
 
         r.bind("<Button-1>",        self._drag_start)
@@ -130,7 +149,7 @@ class CodexHamurabbi:
         r.bind("<ButtonRelease-1>", self._drag_end)
         r.bind("<Button-3>",        self._ctx_menu)
 
-        # Header
+        # Header (permanent — survives mode/language rebuilds)
         hdr = tk.Frame(r, bg=C["hdr"], height=24)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
@@ -161,7 +180,7 @@ class CodexHamurabbi:
                  bg=C["hdr"], fg=C["muted"],
                  font=("Segoe UI", 7)).pack(side="right", padx=3)
 
-    # ── Content ───────────────────────────────────────────────────────────────
+    # ── Content (rebuilt on mode / language change) ───────────────────────────
     def _build_content(self):
         if self._body:
             self._body.destroy()
@@ -177,41 +196,39 @@ class CodexHamurabbi:
         self._body.pack(fill="x", pady=(4, 5))
 
         self._rows_widgets = []
-        for val_key, sub_key, icon, name_key, row_type in ROWS:
+        for key_pct, key_rst, icon, name_key in ROWS:
             name = i18n.get(lang, name_key)
             if compact:
                 w = self._make_compact_row(self._body, icon)
             else:
-                w = self._make_full_row(self._body, icon, name, row_type)
+                w = self._make_full_row(self._body, icon, name)
             self._rows_widgets.append(w)
 
         x, y = self.root.winfo_x(), self.root.winfo_y()
         self.root.geometry(f"{W}x1+{x}+{y}")
 
-    def _make_full_row(self, parent, icon: str, name: str,
-                       row_type: str) -> dict:
+    def _make_full_row(self, parent, icon: str, name: str) -> dict:
         f = tk.Frame(parent, bg=C["bg"])
         f.pack(fill="x", pady=1)
 
         tk.Label(f, text=f"{icon} {name}", bg=C["bg"], fg=C["muted"],
                  font=("Segoe UI", 7), width=12, anchor="w").pack(side="left")
 
-        if row_type == "bar":
-            canvas = tk.Canvas(f, height=5, bg=C["bar"],
-                               highlightthickness=0, bd=0, width=62)
-            canvas.pack(side="left", padx=(2, 3))
-        else:
-            canvas = None
-            tk.Frame(f, width=67, bg=C["bg"]).pack(side="left")  # spacer
+        canvas = tk.Canvas(f, height=5, bg=C["bar"],
+                           highlightthickness=0, bd=0, width=62)
+        canvas.pack(side="left", padx=(2, 3))
 
-        val_var = tk.StringVar(value="—")
-        val_lbl = tk.Label(f, textvariable=val_var, bg=C["bg"], fg=C["text"],
-                           font=("Segoe UI", 7), anchor="e",
-                           width=6 if row_type == "bar" else 10)
-        val_lbl.pack(side="left")
+        pct_var = tk.StringVar(value="—")
+        pct_lbl = tk.Label(f, textvariable=pct_var, bg=C["bg"], fg=C["text"],
+                           font=("Segoe UI", 7), width=4, anchor="e")
+        pct_lbl.pack(side="left")
 
-        return {"mode": "full", "canvas": canvas, "row_type": row_type,
-                "val_var": val_var, "val_lbl": val_lbl}
+        rst_var = tk.StringVar(value="")
+        tk.Label(f, textvariable=rst_var, bg=C["bg"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(side="left", padx=(3, 0))
+
+        return {"mode": "full", "canvas": canvas,
+                "pct_var": pct_var, "pct_lbl": pct_lbl, "rst_var": rst_var}
 
     def _make_compact_row(self, parent, icon: str) -> dict:
         f = tk.Frame(parent, bg=C["bg"])
@@ -220,17 +237,19 @@ class CodexHamurabbi:
         tk.Label(f, text=icon, bg=C["bg"], fg=C["muted"],
                  font=("Segoe UI", 8), width=2).pack(side="left")
 
-        val_var = tk.StringVar(value="—")
-        val_lbl = tk.Label(f, textvariable=val_var, bg=C["bg"], fg=C["text"],
-                           font=("Segoe UI", 8, "bold"), width=7, anchor="e")
-        val_lbl.pack(side="left")
+        pct_var = tk.StringVar(value="—")
+        pct_lbl = tk.Label(f, textvariable=pct_var, bg=C["bg"], fg=C["text"],
+                           font=("Segoe UI", 8, "bold"), width=5, anchor="e")
+        pct_lbl.pack(side="left")
 
-        return {"mode": "compact", "canvas": None, "row_type": "text",
-                "val_var": val_var, "val_lbl": val_lbl}
+        rst_var = tk.StringVar(value="")
+        tk.Label(f, textvariable=rst_var, bg=C["bg"], fg=C["muted"],
+                 font=("Segoe UI", 7)).pack(side="left", padx=(5, 0))
+
+        return {"mode": "compact", "pct_var": pct_var, "pct_lbl": pct_lbl,
+                "rst_var": rst_var}
 
     def _draw_bar(self, canvas: tk.Canvas, pct: float, color: str):
-        if canvas is None:
-            return
         canvas.update_idletasks()
         w = canvas.winfo_width() or 62
         canvas.delete("all")
@@ -249,37 +268,28 @@ class CodexHamurabbi:
     # ── Data refresh ──────────────────────────────────────────────────────────
     def _refresh_ui(self):
         cache = read_cache()
+        lang  = self.cfg["lang"]
 
-        for i, (val_key, sub_key, icon, name_key, row_type) in enumerate(ROWS):
-            w = self._rows_widgets[i]
+        for i, (key_pct, key_rst, icon, name_key) in enumerate(ROWS):
+            pct   = float(cache.get(key_pct, 0))
+            color = bar_color(pct)
+            w     = self._rows_widgets[i]
 
-            raw = cache.get(val_key, 0)
-
-            if row_type == "bar":
-                pct = float(raw or 0)
-                color = bar_color(pct)
-                display = str(cache.get(sub_key, "—"))
-                w["val_lbl"].config(fg=pct_color(pct))
-                self.root.after(30 * i,
-                    lambda c=w["canvas"], p=pct, col=color:
-                        self._draw_bar(c, p, col))
+            if key_rst is None:  # Credits row
+                used    = cache.get("cr_used",  0)
+                limit   = cache.get("cr_limit", 0)
+                curr    = "€" if cache.get("cr_curr") == "EUR" else cache.get("cr_curr", "")
+                rst_txt = f"{used:.2f} / {limit:.2f} {curr}"
             else:
-                # text row
-                if val_key == "today_sessions":
-                    sfx = self._t("sessions_sfx")
-                    display = f"{raw} {sfx}" if raw else "—"
-                elif val_key == "last_model":
-                    # shorten model name
-                    m = str(raw or "—")
-                    display = m.replace("gpt-5.4-mini", "GPT-5 mini") \
-                               .replace("gpt-5.4", "GPT-5") \
-                               .replace("gpt-4", "GPT-4")
-                else:
-                    display = str(raw) if raw else "—"
+                rst_txt = fmt_reset(cache.get(key_rst), lang)
 
-                w["val_lbl"].config(fg=C["text"])
+            w["pct_var"].set(f"{pct:.0f}%")
+            w["pct_lbl"].config(fg=pct_color(pct))
+            w["rst_var"].set(rst_txt)
 
-            w["val_var"].set(display)
+            if w["mode"] == "full":
+                self.root.after(30 * i, lambda c=w["canvas"], p=pct, col=color:
+                                self._draw_bar(c, p, col))
 
         if cache.get("fetched_at"):
             try:
@@ -341,6 +351,7 @@ class CodexHamurabbi:
         m.add_command(label=self._t("menu_refresh"), command=self._bg_fetch)
         m.add_separator()
 
+        # Interval submenu
         sub = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                       activebackground=C["accent"], font=("Segoe UI", 9))
         for v, key in [(60, "int_1m"), (300, "int_5m"),
@@ -350,6 +361,7 @@ class CodexHamurabbi:
                             command=lambda v=v: self._set_interval(v))
         m.add_cascade(label=self._t("menu_interval"), menu=sub)
 
+        # Opacity submenu
         sub2 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                        activebackground=C["accent"], font=("Segoe UI", 9))
         for a in (1.0, 0.92, 0.80, 0.60):
@@ -358,6 +370,7 @@ class CodexHamurabbi:
                              command=lambda a=a: self._set_opacity(a))
         m.add_cascade(label=self._t("menu_opacity"), menu=sub2)
 
+        # Language submenu
         sub3 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
                        activebackground=C["accent"], font=("Segoe UI", 9))
         for code, label in i18n.LANGUAGES.items():

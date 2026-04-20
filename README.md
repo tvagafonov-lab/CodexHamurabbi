@@ -1,9 +1,9 @@
 # CodexHamurabbi
 
 > **The only usage monitor built specifically for the Codex Desktop app (Windows).**  
-> No API calls, no auth tokens — reads directly from Codex's local SQLite database.
+> No API calls, no auth tokens — reads directly from Codex's local session files.
 
-Compact always-on-top overlay that shows your real-time **Codex usage stats** — tokens today, tokens this week, active sessions — directly on your desktop.
+Compact always-on-top overlay that shows your real-time **Codex usage stats** — 5-hour window, weekly limit, and extra credits — directly on your desktop.
 
 <img src="docs/screenshot-full.png" alt="Full mode" width="265"> <img src="docs/screenshot-compact.png" alt="Compact mode" width="165">
 
@@ -13,19 +13,19 @@ Compact always-on-top overlay that shows your real-time **Codex usage stats** �
 
 | Metric | Description |
 |---|---|
-| 📅 **Today** | Tokens used today across all sessions |
-| 📆 **7 days** | Tokens used over the last 7 days |
-| 🔀 **Sessions** | Number of Codex sessions today |
+| ⏱ **5h window** | 5-hour rolling window usage & time to reset |
+| 📅 **Week** | 7-day total usage & time to reset |
+| 💳 **Credits** | Extra credits used / monthly limit |
 
-Color-coded progress bars scale visually (100M = full bar today, 500M = full bar weekly).
+Color-coded progress bars: green → yellow → red as limits approach.
 
-**Two modes:** full (with progress bars) and compact (icon + value). Double-click the header to switch.
+**Two modes:** full (with progress bars) and compact (icon + % + time to reset). Double-click the header to switch.
 
 ---
 
 ## Languages
 
-Right-click → **🌐 Language** to switch instantly. Persists across restarts.
+Right-click the overlay → **🌐 Language** to switch instantly. Setting persists across restarts.
 
 | Code | Language |
 |---|---|
@@ -35,17 +35,17 @@ Right-click → **🌐 Language** to switch instantly. Persists across restarts.
 | `ru` | Русский |
 | `lg` | Luganda |
 
-Want to add yours? Edit [`i18n.py`](i18n.py) — one block, no build step.
+Want to add your language? Edit [`i18n.py`](i18n.py) — copy any block, add a new key, translate the values. One file, no build step.
 
 ---
 
 ## Requirements
 
 - **Windows 10 / 11**
-- **Python 3.10+** — [python.org/downloads](https://python.org/downloads/) *(check "Add Python to PATH")*
-- **Codex Desktop app** — [openai.com/codex](https://openai.com/codex) (any paid plan)
+- **Python 3.10+** — [python.org/downloads](https://python.org/downloads/) *(check "Add Python to PATH" during install)*
+- **Codex Desktop app** — any paid plan
 
-No external Python packages required — uses stdlib `sqlite3` and `tkinter` only.
+No external Python packages required — uses stdlib `json`, `glob`, and `tkinter` only.
 
 ---
 
@@ -67,9 +67,9 @@ Double-click **`start_monitor.bat`**
 
 That's it. No setup wizard, no API keys. The overlay reads from:
 ```
-%USERPROFILE%\.codex\state_5.sqlite
+%USERPROFILE%\.codex\sessions\YYYY\MM\DD\*.jsonl
 ```
-which Codex Desktop writes automatically.
+which Codex Desktop writes automatically during every session.
 
 ---
 
@@ -90,12 +90,19 @@ Settings saved to `%USERPROFILE%\.codex\hamurabbi_settings.json`.
 
 ## How it works
 
-Codex Desktop stores session data in a local SQLite database:
+Codex Desktop writes session events to local JSONL files:
 ```
-%USERPROFILE%\.codex\state_5.sqlite   →   table: threads (tokens_used, updated_at)
+%USERPROFILE%\.codex\sessions\YYYY\MM\DD\<session-id>.jsonl
 ```
 
-CodexHamurabbi opens this file in read-only mode, aggregates `tokens_used` by day, and displays the result. No network requests. No authentication.
+Each file contains `event_msg` events. CodexHamurabbi scans these files, finds the most recent `token_count` event, and reads the `rate_limits` object — the same limits displayed in the Codex app settings. No network requests. No authentication.
+
+```
+rate_limits:
+  primary    → 5-hour rolling window (used_percent, resets_at)
+  secondary  → weekly total (used_percent, resets_at)
+  credits    → extra credits (used_credits, monthly_limit)
+```
 
 Data refreshes every **5 minutes** by default (configurable: 1 / 5 / 10 / 30 min).
 
@@ -106,7 +113,7 @@ Data refreshes every **5 minutes** by default (configurable: 1 / 5 / 10 / 30 min
 ```
 CodexHamurabbi/
 ├── codex_monitor.py   # Main overlay (tkinter)
-├── fetch_codex.py     # Reads from state_5.sqlite
+├── fetch_codex.py     # Reads rate_limits from JSONL session files
 ├── i18n.py            # Translations — edit to add a language
 ├── start_monitor.bat  # Launch overlay
 └── requirements.txt   # (empty — no dependencies)
@@ -128,8 +135,8 @@ Shows 5h window, weekly limit, Sonnet usage, Design, and extra credits.
 **Window not visible**  
 → Delete `%USERPROFILE%\.codex\hamurabbi_settings.json` and restart — reappears bottom-right.
 
-**Shows 0 tokens**  
-→ Make sure Codex Desktop has run at least one session today.
+**Shows 0% on all bars**  
+→ Make sure Codex Desktop has run at least one session. The overlay reads from today's session files.
 
 **"Python not found"**  
 → Reinstall Python from [python.org](https://python.org/downloads/) and check **"Add Python to PATH"**.
