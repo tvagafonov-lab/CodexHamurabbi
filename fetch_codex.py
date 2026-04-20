@@ -42,6 +42,14 @@ def _latest_rate_limits() -> dict | None:
     best: tuple[str, dict] | None = None   # (iso_timestamp, rate_limits)
 
     for _mt, fpath in all_files[:30]:
+        # Files are sorted newest-first; once a file is older than our best
+        # event timestamp, no later file can improve on it.
+        if best is not None:
+            try:
+                if _mt < datetime.fromisoformat(best[0].replace("Z", "+00:00")).timestamp():
+                    break
+            except Exception:
+                pass
         try:
             with open(fpath, encoding="utf-8", errors="ignore") as fh:
                 for line in fh:

@@ -116,11 +116,13 @@ def pct_color(pct: float) -> str:
 # ── Main window ───────────────────────────────────────────────────────────────
 class CodexHamurabbi:
     def __init__(self):
-        self.cfg         = Settings()
-        self.root        = tk.Tk()
-        self._body       = None
-        self._rows_widgets = []
-        self._known_mtime = 0.0   # latest mtime seen across all session files
+        self.cfg              = Settings()
+        self.root             = tk.Tk()
+        self._body            = None
+        self._rows_widgets    = []
+        self._known_mtime     = 0.0   # latest mtime seen across all session files
+        self._last_fetch_time = 0.0
+        self._refresh_id      = None
         self._build_window()
         self._build_content()
         self._fit_height()
@@ -293,20 +295,23 @@ class CodexHamurabbi:
             except Exception:
                 pass
 
-        self.root.after(10_000, self._refresh_ui)
+        if self._refresh_id is not None:
+            self.root.after_cancel(self._refresh_id)
+        self._refresh_id = self.root.after(10_000, self._refresh_ui)
 
     # ── Mode & language ───────────────────────────────────────────────────────
-    def _toggle_compact(self):
-        self.cfg["compact"] = not self.cfg["compact"]
+    def _rebuild_ui(self):
         self._build_content()
         self.root.after(50, self._fit_height)
         self._refresh_ui()
+
+    def _toggle_compact(self):
+        self.cfg["compact"] = not self.cfg["compact"]
+        self._rebuild_ui()
 
     def _set_lang(self, lang: str):
         self.cfg["lang"] = lang
-        self._build_content()
-        self.root.after(50, self._fit_height)
-        self._refresh_ui()
+        self._rebuild_ui()
 
     # ── Background fetch ──────────────────────────────────────────────────────
     def _bg_fetch(self):
@@ -340,14 +345,19 @@ class CodexHamurabbi:
         return latest
 
     def _watch_sessions(self):
-        """Every 5 s: re-fetch if any session file was modified since last fetch."""
-        try:
-            mt = self._find_latest_session_mtime()
-            if mt > self._known_mtime:
-                self._known_mtime = mt
-                self._bg_fetch()
-        except Exception:
-            pass
+        """Every 5 s: scan session files in a background thread; re-fetch if changed."""
+        def check():
+            try:
+                mt = self._find_latest_session_mtime()
+                if mt > self._known_mtime:
+                    now = time.time()
+                    if now - self._last_fetch_time >= 15:
+                        self._known_mtime     = mt
+                        self._last_fetch_time = now
+                        self.root.after(0, self._bg_fetch)
+            except Exception:
+                pass
+        threading.Thread(target=check, daemon=True).start()
         self.root.after(5_000, self._watch_sessions)
 
     def _schedule_bg_fetch(self):
