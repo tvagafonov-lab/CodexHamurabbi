@@ -383,7 +383,7 @@ class CodexHamurabbi:
         if display_pct > 0:
             canvas.create_arc(p, p, s - p, s - p,
                               start=90,
-                              extent=-max(1.0, 3.6 * min(display_pct, 100)),
+                              extent=-min(max(1.0, 3.6 * display_pct), 359.9),
                               style="arc", width=4, outline=color)
         # Center percentage text
         canvas.create_text(s // 2, s // 2,
