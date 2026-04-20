@@ -1,0 +1,2 @@
+# No external dependencies — reads local SQLite, uses stdlib only
+# tkinter is included with Python on Windows
