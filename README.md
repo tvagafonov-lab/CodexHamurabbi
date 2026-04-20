@@ -17,9 +17,14 @@ Compact always-on-top overlay that shows your real-time **Codex usage stats** �
 | 📅 **Week** | 7-day total usage & time to reset |
 | 💳 **Credits** | Extra credits used / monthly limit |
 
-Color-coded progress bars: green → yellow → red as limits approach.
+Color-coded progress bars / rings: green → yellow → red as limits approach.
 
-**Two modes:** full (with progress bars) and compact (icon + % + time to reset). Double-click the header to switch.
+**Three modes:**
+- **Full** — progress bars + labels + reset countdowns
+- **Compact** — icon + % + time to reset (165 px wide)
+- **Dock** — donut-ring strip (44 px tall) that snaps above the Windows taskbar
+
+Double-click the header to toggle full ↔ compact. Right-click → ⊞ Dock mode to go minimal.
 
 ---
 
@@ -80,8 +85,8 @@ which Codex Desktop writes automatically during every session.
 |---|---|
 | Drag | Move the window anywhere |
 | Double-click header | Toggle compact / full mode |
-| Right-click | Context menu (interval, opacity, language, refresh) |
-| ↺ button | Force refresh |
+| Double-click (dock) | Exit dock mode |
+| Right-click | Context menu (mode, %, opacity, language, close) |
 | ✕ button | Close |
 
 Settings saved to `%USERPROFILE%\.codex\hamurabbi_settings.json`.
@@ -104,7 +109,7 @@ rate_limits:
   credits    → extra credits (used_credits, monthly_limit)
 ```
 
-Data refreshes every **5 minutes** by default (configurable: 1 / 5 / 10 / 30 min).
+The overlay watches session files for changes (checks every 5 s) and re-reads immediately when Codex writes new token counts — no manual refresh needed.
 
 ---
 
@@ -136,7 +141,7 @@ Shows 5h window, weekly limit, Sonnet usage, Design, and extra credits.
 → Delete `%USERPROFILE%\.codex\hamurabbi_settings.json` and restart — reappears bottom-right.
 
 **Shows 0% on all bars**  
-→ Make sure Codex Desktop has run at least one session. The overlay reads from today's session files.
+→ Make sure Codex Desktop has run at least one session. The overlay scans all sessions from the past 8 days.
 
 **"Python not found"**  
 → Reinstall Python from [python.org](https://python.org/downloads/) and check **"Add Python to PATH"**.
