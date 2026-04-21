@@ -445,15 +445,19 @@ class CodexHamurabbi:
         self._hover_hide_id   = None
         self._last_pct_5h     = 0.0
         self._last_pct_wk     = 0.0
+        # Defer entering tray mode until the first _bg_fetch has populated
+        # the cache — otherwise the tray icon would bake in 0 % for a few
+        # seconds while the async fetch is still running.
+        self._tray_wanted     = bool(self.cfg["tray"]) and TRAY_AVAILABLE
         self._build_window()
         self._build_content()
         self._fit_height()
         self._refresh_ui()
         self._schedule_bg_fetch()
-        # Honor persisted tray state — enter tray AFTER first _refresh_ui so
-        # the initial icon reflects current cache values.
-        if self.cfg["tray"] and TRAY_AVAILABLE:
-            self.root.after(200, self._enter_tray)
+        # Fallback: if the JSONL scan is slow / empty, still enter tray
+        # after a reasonable delay so the icon shows up (even with 0 %).
+        if self._tray_wanted:
+            self.root.after(5_000, self._enter_tray_if_pending)
 
     def _t(self, key: str, **kwargs) -> str:
         return i18n.get(self.cfg["lang"], key, **kwargs)
@@ -768,8 +772,18 @@ class CodexHamurabbi:
                 self.root.after(0, lambda: self._upd_var.set(f"⚠ {err}"))
             else:
                 self.root.after(0, self._refresh_ui)
+                # Enter tray only after the first successful fetch — the
+                # icon then shows real percentages, not a cold-cache 0.
+                self.root.after(0, self._enter_tray_if_pending)
         threading.Thread(target=run, daemon=True).start()
         self._upd_var.set("↻ …")
+
+    def _enter_tray_if_pending(self):
+        """Honor a pending startup request to enter tray mode (called once
+        the first fetch has populated the cache, or as a timeout fallback)."""
+        if self._tray_wanted and self._tray_icon is None:
+            self._tray_wanted = False   # one-shot
+            self._enter_tray()
 
     def _find_latest_session_mtime(self) -> float:
         """Cheaply scan session dirs for the newest JSONL mtime."""
