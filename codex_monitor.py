@@ -14,6 +14,16 @@ from datetime import datetime, timedelta, timezone
 import i18n
 import fetch_codex
 
+# Tray-mode deps are optional — the overlay works fully without them if the
+# user never enables tray. Import lazily but eagerly-try here so the menu
+# item can hide itself cleanly when the libs aren't installed.
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    TRAY_AVAILABLE = True
+except Exception:
+    TRAY_AVAILABLE = False
+
 # Win32 indices for GetSystemMetrics / SystemParametersInfo.
 SM_XVIRTUALSCREEN  = 76
 SM_YVIRTUALSCREEN  = 77
@@ -30,6 +40,7 @@ DEFAULT_SETTINGS = {
     "opacity":        0.92,
     "compact":        False,
     "dock":           False,
+    "tray":           False,   # fourth mode: hidden overlay, system-tray icon
     "dock_x":         -1,      # saved X in dock mode (-1 = default near Start)
     "lang":           "en",
     "show_remaining": True,    # True = remaining %, False = used %
@@ -62,6 +73,9 @@ DOCK_H              = RING_SIZE + RING_PAD * 2 + 2
 DOCK_DEFAULT_X      = 80   # default dock X near the Win11 Start button
 TASKBAR_FALLBACK_H  = 48   # assumed taskbar height if SPI_GETWORKAREA fails
 FALLBACK_FETCH_MS   = 180_000   # re-fetch every 3 min even when nothing changed
+TRAY_ICON_SIZE      = 32        # drawn size; Windows downscales to 16×16
+TRAY_OUTER_WIDTH    = 4         # outer ring stroke (5h)
+TRAY_INNER_WIDTH    = 3         # inner ring stroke (week)
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -197,6 +211,29 @@ def pct_color(pct: float) -> str:
     return C["text"]
 
 
+def _pil_color(hex_str: str) -> tuple:
+    """Convert a '#rrggbb' string to an opaque RGBA tuple for Pillow."""
+    h = hex_str.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 255)
+
+
+def resolve_row(cache: dict, key_pct: str, key_rst: "str | None",
+                win_s: int, lang: str, now: "datetime") -> tuple:
+    """Compute (pct, rst_txt, credits_tuple_or_None) for a ROWS entry.
+    Shared by _refresh_ui, _build_tray_tooltip and _show_hover_card so the
+    stale-reset-zeroing and credits formatting live in one place."""
+    if key_rst is None:  # Credits row
+        used  = cache.get("cr_used",  0)
+        limit = cache.get("cr_limit", 0)
+        curr  = "€" if cache.get("cr_curr") == "EUR" else cache.get("cr_curr", "")
+        rst_txt = f"{used:.2f} / {limit:.2f} {curr}".rstrip()
+        return (float(cache.get(key_pct, 0)), rst_txt, (used, limit, curr))
+    pct = float(cache.get(key_pct, 0))
+    if reset_passed(cache.get(key_rst), now):
+        pct = 0.0
+    return (pct, fmt_reset(cache.get(key_rst), lang, win_s, now), None)
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 class CodexHamurabbi:
     def __init__(self):
@@ -207,11 +244,20 @@ class CodexHamurabbi:
         self._known_mtime     = 0.0   # latest mtime seen across all session files
         self._last_fetch_time = 0.0
         self._refresh_id      = None
+        self._tray_icon       = None
+        self._hover_card      = None
+        self._hover_hide_id   = None
+        self._last_pct_5h     = 0.0
+        self._last_pct_wk     = 0.0
         self._build_window()
         self._build_content()
         self._fit_height()
         self._refresh_ui()
         self._schedule_bg_fetch()
+        # Honor persisted tray state — enter tray AFTER first _refresh_ui so
+        # the initial icon reflects current cache values.
+        if self.cfg["tray"] and TRAY_AVAILABLE:
+            self.root.after(200, self._enter_tray)
 
     def _t(self, key: str, **kwargs) -> str:
         return i18n.get(self.cfg["lang"], key, **kwargs)
@@ -362,19 +408,11 @@ class CodexHamurabbi:
         now   = datetime.now(tz=timezone.utc)   # single snapshot for the whole tick
 
         for i, (key_pct, key_rst, icon, name_key, win_s) in enumerate(ROWS):
-            pct = float(cache.get(key_pct, 0))
-            if key_rst is not None and reset_passed(cache.get(key_rst), now):
-                pct = 0.0  # stale cache after window rollover
+            pct, rst_txt, _ = resolve_row(cache, key_pct, key_rst, win_s, lang, now)
+            if   key_pct == "fh_pct": self._last_pct_5h = pct
+            elif key_pct == "wd_pct": self._last_pct_wk = pct
             color = bar_color(pct)
             w     = self._rows_widgets[i]
-
-            if key_rst is None:  # Credits row
-                used    = cache.get("cr_used",  0)
-                limit   = cache.get("cr_limit", 0)
-                curr    = "€" if cache.get("cr_curr") == "EUR" else cache.get("cr_curr", "")
-                rst_txt = f"{used:.2f} / {limit:.2f} {curr}"
-            else:
-                rst_txt = fmt_reset(cache.get(key_rst), lang, win_s, now)
 
             if w["mode"] == "dock":
                 self.root.after(30 * i, lambda c=w["canvas"], p=pct, col=color:
@@ -396,6 +434,9 @@ class CodexHamurabbi:
                 pass
 
         self._reclaim_if_offscreen()
+
+        if self.cfg["tray"] and self._tray_icon is not None:
+            self._update_tray(cache, now)
 
         if self._refresh_id is not None:
             self.root.after_cancel(self._refresh_id)
@@ -578,6 +619,185 @@ class CodexHamurabbi:
             self._bg_fetch()
         self.root.after(FALLBACK_FETCH_MS, self._periodic_fallback)
 
+    # ── Tray mode ─────────────────────────────────────────────────────────────
+    def _toggle_tray(self):
+        if not TRAY_AVAILABLE:
+            return
+        if self.cfg["tray"]:
+            self._exit_tray()
+        else:
+            self._enter_tray()
+
+    def _enter_tray(self):
+        """Hide the overlay, spawn a system-tray icon with two progress rings.
+        On any rendering/pystray failure we abort cleanly back to overlay mode
+        — otherwise the window would be withdrawn with no tray to control it."""
+        try:
+            icon_img = self._build_tray_image(self._last_pct_5h, self._last_pct_wk)
+            tooltip  = self._build_tray_tooltip()
+        except Exception:
+            return
+        self.cfg["tray"] = True
+        self.root.withdraw()
+
+        def on_show(icon, item):    self.root.after(0, self._show_hover_card)
+        def on_restore(icon, item): self.root.after(0, self._exit_tray)
+        def on_quit(icon, item):
+            # Pressing Quit from the tray means "don't come back" — clear the
+            # persisted tray flag so the next launch opens the overlay normally.
+            self.cfg["tray"] = False
+            try: icon.stop()
+            except Exception: pass
+            self.root.after(0, self._quit_from_tray)
+
+        menu = pystray.Menu(
+            pystray.MenuItem(self._t("menu_tray"), on_show, default=True, visible=False),
+            pystray.MenuItem(self._t("menu_exit_tray"), on_restore),
+            pystray.MenuItem(self._t("menu_close"), on_quit),
+        )
+        self._tray_icon = pystray.Icon("CodexHamurabbi", icon_img,
+                                       title=tooltip, menu=menu)
+        self._last_tray_pcts = (self._last_pct_5h, self._last_pct_wk)
+        self._tray_icon.run_detached()
+
+    def _quit_from_tray(self):
+        self._hide_hover_card()  # cancel any pending after() callback
+        try: self.root.destroy()
+        except Exception: pass
+
+    def _exit_tray(self):
+        """Kill tray icon, close hover-card, bring the overlay back."""
+        self.cfg["tray"] = False
+        if self._tray_icon is not None:
+            try: self._tray_icon.stop()
+            except Exception: pass
+            self._tray_icon = None
+        self._hide_hover_card()
+        self.root.deiconify()
+
+    def _update_tray(self, cache: dict, now: "datetime"):
+        """Refresh the tray icon bitmap and tooltip. Called from _refresh_ui.
+        Skip the full redraw when neither percentage moved — icon/tooltip are
+        identical, Shell_NotifyIcon(NIM_MODIFY) is a no-op we can save."""
+        if self._tray_icon is None:
+            return
+        pcts = (self._last_pct_5h, self._last_pct_wk)
+        if pcts == getattr(self, "_last_tray_pcts", None):
+            self._tray_icon.title = self._build_tray_tooltip(cache, now)
+            return
+        try:
+            self._tray_icon.icon  = self._build_tray_image(*pcts)
+            self._tray_icon.title = self._build_tray_tooltip(cache, now)
+            self._last_tray_pcts  = pcts
+        except Exception:
+            pass  # pystray/PIL error: don't break refresh_ui
+
+    def _build_tray_image(self, pct_5h: float, pct_wk: float):
+        """Render a 32x32 RGBA icon: outer arc = 5h, inner arc = week, center
+        disc in brand accent color. Windows downscales to 16x16 for the tray."""
+        s = TRAY_ICON_SIZE
+        img   = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        d     = ImageDraw.Draw(img)
+        track = (60, 55, 85, 255)   # muted violet-grey track
+
+        def arc(bbox, pct, color, width):
+            d.ellipse(bbox, outline=track, width=width)
+            span = max(1.0, min(359.9, 3.6 * max(0.0, min(100.0, pct))))
+            d.arc(bbox, start=-90, end=-90 + span, fill=color, width=width)
+
+        arc((1, 1, s - 2, s - 2), pct_5h, _pil_color(bar_color(pct_5h)),
+            TRAY_OUTER_WIDTH)
+        arc((8, 8, s - 9, s - 9), pct_wk, _pil_color(bar_color(pct_wk)),
+            TRAY_INNER_WIDTH)
+        d.ellipse((12, 12, s - 12, s - 12), fill=_pil_color(C["accent"]))
+        return img
+
+    def _build_tray_tooltip(self, cache: "dict | None" = None,
+                            now: "datetime | None" = None) -> str:
+        """Short multi-line text shown as the native Windows tray tooltip.
+        Reuse cache + `now` from the refresh tick when available."""
+        if cache is None: cache = read_cache()
+        if now   is None: now   = datetime.now(tz=timezone.utc)
+        lang  = self.cfg["lang"]
+        lines = ["CodexHamurabbi"]
+        for key_pct, key_rst, icon, name_key, win_s in ROWS:
+            pct, rst_txt, credits = resolve_row(cache, key_pct, key_rst,
+                                                win_s, lang, now)
+            name = i18n.get(lang, name_key)
+            if credits is not None:
+                lines.append(f"{icon} {name}: {rst_txt}")
+            else:
+                lines.append(f"{icon} {name}: {pct:.0f}%   {rst_txt}")
+        return "\n".join(lines)[:127]   # Win32 tooltip hard cap
+
+    def _show_hover_card(self):
+        """Compact Toplevel popup shown on tray left-click. Closes on FocusOut
+        or after an 8 s fallback timeout."""
+        self._hide_hover_card()
+        card = tk.Toplevel(self.root)
+        card.overrideredirect(True)
+        card.attributes("-topmost", True)
+        card.attributes("-alpha", self.cfg["opacity"])
+        card.configure(bg=C["bg"])
+
+        hdr = tk.Frame(card, bg=C["hdr"])
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="◆ CodexHamurabbi", bg=C["hdr"], fg=C["accent"],
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=7, pady=3)
+        close = tk.Label(hdr, text="✕", bg=C["hdr"], fg=C["muted"],
+                         font=("Segoe UI", 9), cursor="hand2")
+        close.pack(side="right", padx=5)
+        close.bind("<Button-1>", lambda _: self._hide_hover_card())
+
+        body = tk.Frame(card, bg=C["bg"], padx=10, pady=6)
+        body.pack(fill="x")
+        cache = read_cache()
+        lang  = self.cfg["lang"]
+        now   = datetime.now(tz=timezone.utc)
+        for key_pct, key_rst, icon, name_key, win_s in ROWS:
+            pct, rst_txt, credits = resolve_row(cache, key_pct, key_rst,
+                                                win_s, lang, now)
+            row = tk.Frame(body, bg=C["bg"])
+            row.pack(fill="x", pady=1)
+            tk.Label(row, text=f"{icon} {i18n.get(lang, name_key)}",
+                     bg=C["bg"], fg=C["muted"], font=("Segoe UI", 8),
+                     width=12, anchor="w").pack(side="left")
+            if credits is not None:
+                tk.Label(row, text=rst_txt, bg=C["bg"], fg=C["text"],
+                         font=("Segoe UI", 8)).pack(side="left")
+            else:
+                tk.Label(row, text=f"{pct:.0f}%", bg=C["bg"], fg=pct_color(pct),
+                         font=("Segoe UI", 8, "bold"), width=5, anchor="e"
+                         ).pack(side="left")
+                tk.Label(row, text=rst_txt, bg=C["bg"], fg=C["muted"],
+                         font=("Segoe UI", 8)).pack(side="left", padx=(6, 0))
+
+        card.update_idletasks()
+        w, h = card.winfo_reqwidth(), card.winfo_reqheight()
+        # Anchor near the cursor but keep the card fully on-screen.
+        cx, cy = self.root.winfo_pointerx(), self.root.winfo_pointery()
+        x, y = cx - w // 2, cy - h - 12
+        vs = _virtual_screen_rect() or (0, 0, 1920, 1080)
+        vl, vt, vr, vb = vs
+        x = max(vl + 4, min(x, vr - w - 4))
+        y = max(vt + 4, min(y, vb - h - 4))
+        card.geometry(f"{w}x{h}+{x}+{y}")
+        card.bind("<FocusOut>",   lambda _: self._hide_hover_card())
+        card.bind("<Button-1>",   lambda _: self._hide_hover_card())
+        card.focus_force()
+        self._hover_card    = card
+        self._hover_hide_id = self.root.after(8_000, self._hide_hover_card)
+
+    def _hide_hover_card(self):
+        if self._hover_hide_id is not None:
+            try: self.root.after_cancel(self._hover_hide_id)
+            except Exception: pass
+            self._hover_hide_id = None
+        if self._hover_card is not None:
+            try: self._hover_card.destroy()
+            except Exception: pass
+            self._hover_card = None
+
     # ── Drag ──────────────────────────────────────────────────────────────────
     def _drag_start(self, e): self._ox, self._oy = e.x, e.y
     def _drag_move(self, e):
@@ -603,6 +823,8 @@ class CodexHamurabbi:
             mode_key = "menu_full" if self.cfg["compact"] else "menu_compact"
             m.add_command(label=self._t(mode_key), command=self._toggle_compact)
             m.add_command(label=self._t("menu_dock"), command=self._toggle_dock)
+            if TRAY_AVAILABLE:
+                m.add_command(label=self._t("menu_tray"), command=self._toggle_tray)
 
         pct_key = "menu_show_used" if self.cfg["show_remaining"] else "menu_show_remaining"
         m.add_command(label=self._t(pct_key), command=self._toggle_show_remaining)

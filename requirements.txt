@@ -1,2 +1,6 @@
-# No external dependencies — reads local SQLite, uses stdlib only
-# tkinter is included with Python on Windows
+# tkinter is bundled with Python on Windows.
+# Codex session data is read from local JSONL files — no HTTP client needed.
+# pystray + Pillow are used only by the optional "tray" mode (system-tray icon
+# with concentric progress rings).
+pystray>=0.19
+Pillow>=10
