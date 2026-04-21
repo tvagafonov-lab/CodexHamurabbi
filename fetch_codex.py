@@ -53,9 +53,12 @@ def _latest_rate_limits() -> dict | None:
     if not sessions_dir.exists():
         return None
 
-    # Only consider files touched in the last hour. A quiet session's cached
-    # rate_limits is hours old and useless — and they're the main cost here.
-    cutoff = time.time() - 3600
+    # Cutoff keeps the file set bounded while still tolerating overnight /
+    # weekend gaps — if no session has been touched in a day, we have nothing
+    # meaningful to show anyway (and `reset_passed` zeros out expired windows
+    # in the UI regardless). The tail-read is ~20 ms per file so even 30 files
+    # stays fast.
+    cutoff = time.time() - 24 * 3600
 
     files: list[tuple[float, str]] = []
     for root, _dirs, names in os.walk(str(sessions_dir)):

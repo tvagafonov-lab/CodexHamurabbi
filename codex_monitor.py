@@ -7,11 +7,19 @@ Double-click header to toggle compact mode. Right-click for settings.
 
 import tkinter as tk
 import ctypes
+from ctypes import wintypes
 import json, os, time, threading
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import i18n
 import fetch_codex
+
+# Win32 indices for GetSystemMetrics / SystemParametersInfo.
+SM_XVIRTUALSCREEN  = 76
+SM_YVIRTUALSCREEN  = 77
+SM_CXVIRTUALSCREEN = 78
+SM_CYVIRTUALSCREEN = 79
+SPI_GETWORKAREA    = 0x0030
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CODEX_HOME    = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
@@ -46,7 +54,13 @@ C = {
 W_FULL    = 265
 W_COMPACT = 165
 
-RING_SIZE = 36   # ring canvas size (px) in dock mode
+RING_SIZE           = 36   # ring canvas size (px) in dock mode
+RING_PAD            = 3    # padding around each ring canvas
+# +2 nudges the strip to 44 px total, matching the Win11 taskbar height so the
+# dock sits flush above it without a hairline gap.
+DOCK_H              = RING_SIZE + RING_PAD * 2 + 2
+DOCK_DEFAULT_X      = 80   # default dock X near the Win11 Start button
+TASKBAR_FALLBACK_H  = 48   # assumed taskbar height if SPI_GETWORKAREA fails
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -54,10 +68,10 @@ def _virtual_screen_rect() -> "tuple[int, int, int, int] | None":
     """Bounding box of all currently connected monitors, in screen coords."""
     try:
         u = ctypes.windll.user32
-        x = u.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
-        y = u.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
-        w = u.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
-        h = u.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+        x = u.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        y = u.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        w = u.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        h = u.GetSystemMetrics(SM_CYVIRTUALSCREEN)
         return (x, y, x + w, y + h)
     except Exception:
         return None
@@ -72,10 +86,8 @@ def _rect_on_screen(x: int, y: int, w: int, h: int, min_overlap: int = 40) -> bo
     vl, vt, vr, vb = vs
     return (min(x + w, vr) - max(x, vl) >= min_overlap
             and min(y + h, vb) - max(y, vt) >= min_overlap)
-RING_PAD  = 3    # padding around each ring canvas
-DOCK_H    = RING_SIZE + RING_PAD * 2 + 2   # = 44 px (matches Win11 taskbar)
 
-# Row definitions: (pct_key, reset_key, icon, i18n_key)
+
 ROWS = [
     # (pct_key, reset_key, icon, label_key, window_seconds)
     ("fh_pct", "fh_reset", "⏱", "row_5h",      5 * 3600),
@@ -105,13 +117,24 @@ class Settings:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+_cache_data: dict = {}
+_cache_mtime: float = 0.0
+
+
 def read_cache() -> dict:
+    """Return the parsed cache file, re-reading only when its mtime changes."""
+    global _cache_data, _cache_mtime
     try:
-        if CACHE_FILE.exists():
-            return json.loads(CACHE_FILE.read_text("utf-8"))
-    except Exception:
-        pass
-    return {}
+        mt = os.path.getmtime(CACHE_FILE)
+    except OSError:
+        return _cache_data
+    if mt != _cache_mtime:
+        try:
+            _cache_data  = json.loads(CACHE_FILE.read_text("utf-8"))
+            _cache_mtime = mt
+        except (OSError, ValueError):
+            pass
+    return _cache_data
 
 
 def _reset_dt(unix_ts: int | None) -> "datetime | None":
@@ -124,13 +147,16 @@ def _reset_dt(unix_ts: int | None) -> "datetime | None":
         return None
 
 
-def reset_passed(unix_ts: int | None) -> bool:
+def reset_passed(unix_ts: int | None, now: "datetime | None" = None) -> bool:
     """True if the given Unix timestamp is in the past."""
     dt = _reset_dt(unix_ts)
-    return dt is not None and dt < datetime.now(tz=timezone.utc)
+    if dt is None:
+        return False
+    return dt < (now or datetime.now(tz=timezone.utc))
 
 
-def fmt_reset(unix_ts: int | None, lang: str, window_seconds: int = 0) -> str:
+def fmt_reset(unix_ts: int | None, lang: str, window_seconds: int = 0,
+              now: "datetime | None" = None) -> str:
     """Format a Unix int timestamp into a human-readable countdown.
 
     When the cached timestamp is in the past and `window_seconds` is known,
@@ -141,7 +167,8 @@ def fmt_reset(unix_ts: int | None, lang: str, window_seconds: int = 0) -> str:
     dt = _reset_dt(unix_ts)
     if dt is None:
         return "—"
-    now  = datetime.now(tz=timezone.utc)
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
     diff = dt - now
     if diff.total_seconds() < 0:
         if window_seconds <= 0:
@@ -331,10 +358,11 @@ class CodexHamurabbi:
     def _refresh_ui(self):
         cache = read_cache()
         lang  = self.cfg["lang"]
+        now   = datetime.now(tz=timezone.utc)   # single snapshot for the whole tick
 
         for i, (key_pct, key_rst, icon, name_key, win_s) in enumerate(ROWS):
             pct = float(cache.get(key_pct, 0))
-            if key_rst is not None and reset_passed(cache.get(key_rst)):
+            if key_rst is not None and reset_passed(cache.get(key_rst), now):
                 pct = 0.0  # stale cache after window rollover
             color = bar_color(pct)
             w     = self._rows_widgets[i]
@@ -345,7 +373,7 @@ class CodexHamurabbi:
                 curr    = "€" if cache.get("cr_curr") == "EUR" else cache.get("cr_curr", "")
                 rst_txt = f"{used:.2f} / {limit:.2f} {curr}"
             else:
-                rst_txt = fmt_reset(cache.get(key_rst), lang, win_s)
+                rst_txt = fmt_reset(cache.get(key_rst), lang, win_s, now)
 
             if w["mode"] == "dock":
                 self.root.after(30 * i, lambda c=w["canvas"], p=pct, col=color:
@@ -363,7 +391,7 @@ class CodexHamurabbi:
             try:
                 dt = datetime.fromisoformat(cache["fetched_at"])
                 self._upd_var.set(f"⟳ {dt.astimezone().strftime('%H:%M')}")
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         self._reclaim_if_offscreen()
@@ -418,19 +446,19 @@ class CodexHamurabbi:
         return len(ROWS) * (RING_SIZE + RING_PAD * 2) + 4
 
     def _dock_snap_pos(self, w: int, h: int) -> tuple:
-        """Y: just above primary-monitor taskbar (SPI_GETWORKAREA).
-        X: saved dock_x, or 80 near Start button. Falls back to the primary
-        monitor if the saved X is stranded on a disconnected monitor."""
+        """Y: just above primary-monitor taskbar. X: saved dock_x, or a small
+        default near the Start button. Falls back to the primary monitor if
+        the saved X is stranded on a disconnected monitor."""
         try:
-            from ctypes import wintypes
             wa = wintypes.RECT()
-            ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(wa), 0)
+            ctypes.windll.user32.SystemParametersInfoW(
+                SPI_GETWORKAREA, 0, ctypes.byref(wa), 0)
             y = wa.bottom - h
         except Exception:
-            y = self.root.winfo_screenheight() - h - 48  # 48 px fallback
-        x = self.cfg["dock_x"] if self.cfg["dock_x"] >= 0 else 80
+            y = self.root.winfo_screenheight() - h - TASKBAR_FALLBACK_H
+        x = self.cfg["dock_x"] if self.cfg["dock_x"] >= 0 else DOCK_DEFAULT_X
         if not _rect_on_screen(x, y, w, h):
-            x = 80
+            x = DOCK_DEFAULT_X
         return x, y
 
     def _build_dock(self):
@@ -471,11 +499,21 @@ class CodexHamurabbi:
     # ── Background fetch ──────────────────────────────────────────────────────
     def _bg_fetch(self):
         def run():
+            err = None
             try:
                 fetch_codex.fetch_and_save()
+            except Exception as e:
+                err = type(e).__name__
+            # Keep _known_mtime in sync so the next watcher tick doesn't
+            # decide the content we just pulled is already stale.
+            try:
+                self._known_mtime = self._find_latest_session_mtime()
             except Exception:
                 pass
-            self.root.after(0, self._refresh_ui)
+            if err:
+                self.root.after(0, lambda: self._upd_var.set(f"⚠ {err}"))
+            else:
+                self.root.after(0, self._refresh_ui)
         threading.Thread(target=run, daemon=True).start()
         self._upd_var.set("↻ …")
 
@@ -516,8 +554,9 @@ class CodexHamurabbi:
         self.root.after(2_000, self._watch_sessions)
 
     def _schedule_bg_fetch(self):
-        """Initial fetch on startup, then hand off to file watcher."""
-        self._known_mtime = self._find_latest_session_mtime()
+        """Initial fetch on startup, then hand off to file watcher.
+        `_bg_fetch`'s thread also primes `_known_mtime`, so we don't need a
+        separate warm-up — and first paint isn't blocked by the disk walk."""
         self._bg_fetch()
         self.root.after(2_000, self._watch_sessions)
 
@@ -551,27 +590,30 @@ class CodexHamurabbi:
         m.add_command(label=self._t(pct_key), command=self._toggle_show_remaining)
         m.add_separator()
 
-        # Opacity submenu
-        sub2 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
-                       activebackground=C["accent"], font=("Segoe UI", 9))
-        for a in (1.0, 0.92, 0.80, 0.60):
-            mark = "✓  " if abs(self.cfg["opacity"] - a) < 0.01 else "    "
-            sub2.add_command(label=f"{mark}{int(a * 100)}%",
-                             command=lambda a=a: self._set_opacity(a))
-        m.add_cascade(label=self._t("menu_opacity"), menu=sub2)
+        opacity_items = [(a, f"{int(a * 100)}%") for a in (1.0, 0.92, 0.80, 0.60)]
+        m.add_cascade(label=self._t("menu_opacity"),
+                      menu=self._submenu(m, opacity_items, self.cfg["opacity"],
+                                         self._set_opacity,
+                                         eq=lambda a, b: abs(a - b) < 0.01))
 
-        # Language submenu
-        sub3 = tk.Menu(m, tearoff=0, bg=C["bg2"], fg=C["text"],
-                       activebackground=C["accent"], font=("Segoe UI", 9))
-        for code, label in i18n.LANGUAGES.items():
-            mark = "✓  " if lang == code else "    "
-            sub3.add_command(label=f"{mark}{label}",
-                             command=lambda c=code: self._set_lang(c))
-        m.add_cascade(label=self._t("menu_language"), menu=sub3)
+        lang_items = list(i18n.LANGUAGES.items())
+        m.add_cascade(label=self._t("menu_language"),
+                      menu=self._submenu(m, lang_items, lang, self._set_lang))
 
         m.add_separator()
         m.add_command(label=self._t("menu_close"), command=self.root.destroy)
         m.post(e.x_root, e.y_root)
+
+    def _submenu(self, parent, items, current, on_select, eq=None):
+        """Build a submenu with a ✓-prefix on the item matching `current`."""
+        sub = tk.Menu(parent, tearoff=0, bg=C["bg2"], fg=C["text"],
+                      activebackground=C["accent"], font=("Segoe UI", 9))
+        match = eq or (lambda a, b: a == b)
+        for value, label in items:
+            mark = "✓  " if match(current, value) else "    "
+            sub.add_command(label=f"{mark}{label}",
+                            command=lambda v=value: on_select(v))
+        return sub
 
     def _toggle_show_remaining(self):
         self.cfg["show_remaining"] = not self.cfg["show_remaining"]
