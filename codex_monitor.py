@@ -129,11 +129,12 @@ TRAY_EDGE_MARGIN    = 1    # inset from icon edge
 # the (ExecutablePath, uID) key that Windows uses to index them). Combined
 # with a stable GUID below (NIF_GUID) this is what actually makes Win11
 # create a Taskbar-settings entry for us.
-TRAY_UID  = 0x7C0D_EC0D        # arbitrary but stable 32-bit identifier
-# Stable GUID for CodexHamurabbi tray icon. Any literal works as long as it
-# stays the same across releases; Windows keys its tray state on this.
-TRAY_GUID = (0x2026A010, 0xC0DE, 0xC0DE,
-             (0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x77, 0x77))
+TRAY_UID  = 0xC0DE_C0DE        # arbitrary but stable 32-bit identifier
+# Stable GUID for CodexHamurabbi tray icon. Do NOT change this once users
+# have it registered — Windows 11 binds (GUID→exe) at first NIM_ADD and
+# refuses new GUID registrations from the same exe for a while after.
+TRAY_GUID = (0xC0DEC0DE, 0xCADE, 0xEAF0,
+             (0x77, 0x77, 0xC0, 0xDE, 0xC0, 0xDE, 0xC0, 0xDE))
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -335,23 +336,39 @@ def _render_single_ring(size: int, pct: float, color_rgba: tuple,
                         track_rgba: tuple, stroke: int,
                         supersample: int = 4,
                         center_rgba: "tuple | None" = None,
-                        edge_margin: int = 3):
+                        edge_margin: int = 3,
+                        outline_rgba: "tuple | None" = None,
+                        outline_width: int = 1):
     """Render an antialiased progress ring of `size`×`size` via supersampling.
+
     Pillow's `arc` has no built-in AA — drawing at 4× size and LANCZOS-
     downsampling gives clean curves at the target resolution.
 
     If `center_rgba` is given, also fills a brand-colored disc inside the
-    ring (for tray icons); the disc is flush against the ring's inside edge."""
-    S = size * supersample
+    ring. If `outline_rgba` is given too, a thin contour is drawn along
+    both edges of the ring and around the center disc — lifts the icon
+    off dark/light taskbars at 16 px."""
+    S   = size * supersample
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
     sw  = stroke * supersample
     margin = edge_margin * supersample
+    ow  = outline_width * supersample
+
     bbox = (margin, margin, S - margin - 1, S - margin - 1)
     d.ellipse(bbox, outline=track_rgba, width=sw)
     if pct > 0:
         span = max(1.0, min(359.9, 3.6 * pct))
         d.arc(bbox, start=-90, end=-90 + span, fill=color_rgba, width=sw)
+
+    if outline_rgba is not None and ow > 0:
+        # Thin contour on the outer edge of the ring
+        d.ellipse(bbox, outline=outline_rgba, width=ow)
+        # Thin contour on the inner edge of the ring (= outer edge of center)
+        ie = margin + sw - ow
+        d.ellipse((ie, ie, S - ie - 1, S - ie - 1),
+                  outline=outline_rgba, width=ow)
+
     if center_rgba is not None:
         c = margin + sw
         d.ellipse((c, c, S - c - 1, S - c - 1), fill=center_rgba)
@@ -912,14 +929,15 @@ class CodexHamurabbi:
         """Render the tray icon: one bold ring = 5h window, brand-colored
         center disc. Supersampled and LANCZOS-downsampled for smooth edges.
         Week/credits live in the tooltip + hover card, not on the icon."""
-        # _ = pct_wk  # (week shown in tooltip, not on the icon)
         return _render_single_ring(
             TRAY_ICON_SIZE, pct_5h,
             ring_color(pct_5h),
             (90, 90, 120, 90),         # semi-transparent track
             TRAY_RING_STROKE,
-            center_rgba=(210, 178, 255, 255),  # Codex lavender
+            center_rgba=(235, 220, 255, 255),   # near-white with Codex tint
             edge_margin=TRAY_EDGE_MARGIN,
+            outline_rgba=(30, 20, 60, 220),     # dark violet contour
+            outline_width=1,
         )
 
     def _build_tray_tooltip(self, cache: "dict | None" = None,
