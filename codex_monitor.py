@@ -119,10 +119,11 @@ FALLBACK_FETCH_MS   = 180_000   # re-fetch every 3 min even when nothing changed
 # size (16 / 20 / 24 px depending on DPI). We further supersample the Pillow
 # rendering 4× and LANCZOS-downsample to 64 for antialiased ring edges.
 TRAY_ICON_SIZE      = 64
-TRAY_OUTER_STROKE   = 12   # outer ring (5h) thickness at target size
-TRAY_INNER_STROKE   = 10   # inner ring (week) thickness at target size
-TRAY_RING_GAP       = 1    # gap between outer and inner rings
-TRAY_EDGE_MARGIN    = 0    # inset from icon edge to outermost ring (flush)
+# One bold ring (5h) + large brand center disc. On the 16 px tray canvas
+# two concentric rings blurred into noise; a single ring + punchy center
+# reads instantly. Week usage moves to the tooltip + hover card.
+TRAY_RING_STROKE    = 14   # outer ring thickness at target size
+TRAY_EDGE_MARGIN    = 1    # inset from icon edge
 # Stable uID lets Windows 11 NotifyIconSettings register this app
 # independently of other pythonw.exe tray icons (which otherwise collide on
 # the (ExecutablePath, uID) key that Windows uses to index them). Combined
@@ -332,20 +333,28 @@ def _promote_tray_icon(uid: int, name_hint: str) -> None:
 
 def _render_single_ring(size: int, pct: float, color_rgba: tuple,
                         track_rgba: tuple, stroke: int,
-                        supersample: int = 4):
+                        supersample: int = 4,
+                        center_rgba: "tuple | None" = None,
+                        edge_margin: int = 3):
     """Render an antialiased progress ring of `size`×`size` via supersampling.
     Pillow's `arc` has no built-in AA — drawing at 4× size and LANCZOS-
-    downsampling gives clean curves at the target resolution."""
+    downsampling gives clean curves at the target resolution.
+
+    If `center_rgba` is given, also fills a brand-colored disc inside the
+    ring (for tray icons); the disc is flush against the ring's inside edge."""
     S = size * supersample
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d   = ImageDraw.Draw(img)
     sw  = stroke * supersample
-    margin = 3 * supersample
+    margin = edge_margin * supersample
     bbox = (margin, margin, S - margin - 1, S - margin - 1)
     d.ellipse(bbox, outline=track_rgba, width=sw)
     if pct > 0:
         span = max(1.0, min(359.9, 3.6 * pct))
         d.arc(bbox, start=-90, end=-90 + span, fill=color_rgba, width=sw)
+    if center_rgba is not None:
+        c = margin + sw
+        d.ellipse((c, c, S - c - 1, S - c - 1), fill=center_rgba)
     return img.resize((size, size), Image.LANCZOS)
 
 
@@ -900,18 +909,17 @@ class CodexHamurabbi:
             pass  # pystray/PIL error: don't break refresh_ui
 
     def _build_tray_image(self, pct_5h: float, pct_wk: float):
-        """Render the tray icon: outer ring = 5h, inner ring = week, center
-        disc in brand accent color. Drawn supersampled via Pillow for smooth
-        edges, then Windows downscales to 16/20/24 px depending on DPI."""
-        return _render_double_ring(
-            TRAY_ICON_SIZE,
-            pct_5h, pct_wk,
+        """Render the tray icon: one bold ring = 5h window, brand-colored
+        center disc. Supersampled and LANCZOS-downsampled for smooth edges.
+        Week/credits live in the tooltip + hover card, not on the icon."""
+        # _ = pct_wk  # (week shown in tooltip, not on the icon)
+        return _render_single_ring(
+            TRAY_ICON_SIZE, pct_5h,
             ring_color(pct_5h),
-            ring_color(pct_wk),
-            (210, 178, 255, 255),   # bright lavender center — Codex signature
-            (90, 90, 120, 90),      # semi-transparent track (alpha=90/255)
-            TRAY_OUTER_STROKE, TRAY_INNER_STROKE,
-            TRAY_RING_GAP, TRAY_EDGE_MARGIN,
+            (90, 90, 120, 90),         # semi-transparent track
+            TRAY_RING_STROKE,
+            center_rgba=(210, 178, 255, 255),  # Codex lavender
+            edge_margin=TRAY_EDGE_MARGIN,
         )
 
     def _build_tray_tooltip(self, cache: "dict | None" = None,
