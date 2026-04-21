@@ -128,11 +128,11 @@ TRAY_EDGE_MARGIN    = 0    # inset from icon edge to outermost ring (flush)
 # the (ExecutablePath, uID) key that Windows uses to index them). Combined
 # with a stable GUID below (NIF_GUID) this is what actually makes Win11
 # create a Taskbar-settings entry for us.
-TRAY_UID  = 0xC0DE_C0DE        # arbitrary but stable 32-bit identifier
+TRAY_UID  = 0x7C0D_EC0D        # arbitrary but stable 32-bit identifier
 # Stable GUID for CodexHamurabbi tray icon. Any literal works as long as it
 # stays the same across releases; Windows keys its tray state on this.
-TRAY_GUID = (0xC0DEC0DE, 0xCADE, 0xEAF0,
-             (0x77, 0x77, 0xC0, 0xDE, 0xC0, 0xDE, 0xC0, 0xDE))
+TRAY_GUID = (0x2026A010, 0xC0DE, 0xC0DE,
+             (0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x77, 0x77))
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -380,7 +380,9 @@ def _render_double_ring(size: int, pct_outer: float, pct_inner: float,
         d.arc(inner_bbox, start=-90, end=-90 + span,
               fill=inner_rgba, width=is_)
 
-    c_off = i_off + is_ + gap
+    # Center disc — flush against the inner ring's inside edge (no extra gap)
+    # so it's as big as possible and the brand color reads at 16 px.
+    c_off = i_off + is_
     d.ellipse((c_off, c_off, S - c_off - 1, S - c_off - 1), fill=accent_rgba)
     return img.resize((size, size), Image.LANCZOS)
 
@@ -906,8 +908,8 @@ class CodexHamurabbi:
             pct_5h, pct_wk,
             ring_color(pct_5h),
             ring_color(pct_wk),
-            _pil_color(C["accent"]),
-            (60, 55, 85, 255),      # muted violet-grey track
+            (210, 178, 255, 255),   # bright lavender center — Codex signature
+            (90, 90, 120, 90),      # semi-transparent track (alpha=90/255)
             TRAY_OUTER_STROKE, TRAY_INNER_STROKE,
             TRAY_RING_GAP, TRAY_EDGE_MARGIN,
         )
