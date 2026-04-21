@@ -14,6 +14,16 @@ from datetime import datetime, timedelta, timezone
 import i18n
 import fetch_codex
 
+# Give Windows a unique AppUserModelID so the shell treats this pythonw.exe
+# instance as its own application — lets us co-exist in the system tray with
+# sibling pythonw overlays (JCC, etc.) and gives taskbar / Start menu a
+# stable identity. Must run before any tk.Tk() / tray icon creation.
+try:
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+        "CodexHamurabbi.Overlay.1")
+except Exception:
+    pass
+
 # Tray-mode deps are optional — the overlay works fully without them if the
 # user never enables tray. Import lazily but eagerly-try here so the menu
 # item can hide itself cleanly when the libs aren't installed.
@@ -26,13 +36,20 @@ try:
     from PIL import Image, ImageDraw, ImageTk
     TRAY_AVAILABLE = True
 
-    # Pystray uses `hID = id(self)` which collides across processes sharing
-    # the same pythonw.exe, so Windows 11 NotifyIconSettings deduplicates us
-    # down to a single registry entry. Override with `self._uid` (set per
-    # app to a stable 32-bit value) so each app gets its own entry and can
-    # be individually enabled in Taskbar settings.
+    # Pystray uses `hID = id(self)` in NOTIFYICONDATAW, which collides across
+    # sibling processes sharing the same pythonw.exe — Windows 11 indexes
+    # NotifyIconSettings by (ExecutablePath, uID) and silently merges the
+    # duplicate, leaving the second app's icon invisible. The robust fix is
+    # NIF_GUID: Windows identifies the icon by GUID instead of (exe, uID),
+    # and different apps get independent registrations / taskbar-settings
+    # entries. Monkey-patch pystray so an instance attribute `_guid` (a
+    # NOTIFYICONDATAW.GUID struct) is honored on every Shell_NotifyIcon call.
     def _pystray_message_patched(self, code, flags, **kwargs):
         import ctypes
+        guid = getattr(self, "_guid", None)
+        if guid is not None:
+            flags |= _pystray_w32.NIF_GUID
+            kwargs["guidItem"] = guid
         _pystray_w32.Shell_NotifyIcon(code, _pystray_w32.NOTIFYICONDATAW(
             cbSize=ctypes.sizeof(_pystray_w32.NOTIFYICONDATAW),
             hWnd=self._hwnd,
@@ -40,6 +57,12 @@ try:
             uFlags=flags,
             **kwargs))
     _pystray_win32.Icon._message = _pystray_message_patched
+
+    def _make_guid(d1: int, d2: int, d3: int, d4: tuple) -> object:
+        import ctypes
+        G = _pystray_w32.NOTIFYICONDATAW.GUID
+        return G(Data1=d1, Data2=d2, Data3=d3,
+                 Data4=(ctypes.c_ubyte * 8)(*d4))
 except Exception:
     TRAY_AVAILABLE = False
 
@@ -102,8 +125,14 @@ TRAY_RING_GAP       = 1    # gap between outer and inner rings
 TRAY_EDGE_MARGIN    = 0    # inset from icon edge to outermost ring (flush)
 # Stable uID lets Windows 11 NotifyIconSettings register this app
 # independently of other pythonw.exe tray icons (which otherwise collide on
-# the (ExecutablePath, uID) key that Windows uses to index them).
-TRAY_UID = 0xC0DE_C0DE        # arbitrary but stable 32-bit identifier
+# the (ExecutablePath, uID) key that Windows uses to index them). Combined
+# with a stable GUID below (NIF_GUID) this is what actually makes Win11
+# create a Taskbar-settings entry for us.
+TRAY_UID  = 0xC0DE_C0DE        # arbitrary but stable 32-bit identifier
+# Stable GUID for CodexHamurabbi tray icon. Any literal works as long as it
+# stays the same across releases; Windows keys its tray state on this.
+TRAY_GUID = (0xC0DEC0DE, 0xCADE, 0xEAF0,
+             (0x77, 0x77, 0xC0, 0xDE, 0xC0, 0xDE, 0xC0, 0xDE))
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -805,8 +834,12 @@ class CodexHamurabbi:
         )
         self._tray_icon = pystray.Icon("CodexHamurabbi", icon_img,
                                        title=tooltip, menu=menu)
-        self._tray_icon._uid = TRAY_UID   # see monkeypatch near imports
-        self._last_tray_pcts = (self._last_pct_5h, self._last_pct_wk)
+        # Must set _uid/_guid BEFORE run_detached — pystray's setup thread
+        # starts immediately and its first Shell_NotifyIcon(NIM_ADD) reads
+        # these via the monkeypatch.
+        self._tray_icon._uid  = TRAY_UID
+        self._tray_icon._guid = _make_guid(*TRAY_GUID)
+        self._last_tray_pcts  = (self._last_pct_5h, self._last_pct_wk)
         self._tray_icon.run_detached()
         # Ask Win11 to keep this icon visible in the main tray area rather
         # than hiding it in the overflow flyout. Writes directly into the
