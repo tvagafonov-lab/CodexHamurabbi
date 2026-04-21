@@ -61,6 +61,7 @@ RING_PAD            = 3    # padding around each ring canvas
 DOCK_H              = RING_SIZE + RING_PAD * 2 + 2
 DOCK_DEFAULT_X      = 80   # default dock X near the Win11 Start button
 TASKBAR_FALLBACK_H  = 48   # assumed taskbar height if SPI_GETWORKAREA fails
+FALLBACK_FETCH_MS   = 180_000   # re-fetch every 3 min even when nothing changed
 
 
 # ── Multi-monitor helpers ─────────────────────────────────────────────────────
@@ -566,6 +567,16 @@ class CodexHamurabbi:
         separate warm-up — and first paint isn't blocked by the disk walk."""
         self._bg_fetch()
         self.root.after(2_000, self._watch_sessions)
+        self.root.after(FALLBACK_FETCH_MS, self._periodic_fallback)
+
+    def _periodic_fallback(self):
+        """Force a fetch every few minutes even when no Codex activity — keeps
+        the `⟳` timestamp fresh and catches any file changes the mtime watcher
+        may have missed. Skipped if the watcher already fetched recently."""
+        if time.time() - self._last_fetch_time >= 120:
+            self._last_fetch_time = time.time()
+            self._bg_fetch()
+        self.root.after(FALLBACK_FETCH_MS, self._periodic_fallback)
 
     # ── Drag ──────────────────────────────────────────────────────────────────
     def _drag_start(self, e): self._ox, self._oy = e.x, e.y
