@@ -3,3 +3,9 @@ __pycache__/
 *.pyo
 err.txt
 *.log
+
+# PyInstaller build artifacts
+/build/
+/dist/
+*.spec
+/CodexHamurabbi.exe
