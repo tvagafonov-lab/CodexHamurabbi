@@ -44,20 +44,23 @@ def _latest_rate_limits() -> dict | None:
     Picking by event timestamp alone can surface a stale 3 % from a quiet
     session and miss the 65 % one that a neighbour just observed.
 
-    Instead: within a single rate-limit window (same `resets_at`), usage is
+    Strategy: within a single rate-limit window (same `resets_at`), usage is
     monotonically non-decreasing, so MAX(used_percent) among events sharing
-    that `resets_at` is the freshest observation. Done per sub-limit
-    (primary / secondary / credits) so a reset in one doesn't shadow the
-    others."""
+    that `resets_at` is the freshest observation.
+
+    Special case — limit exhaustion: when Codex hits the cap it flips
+    `limit_id` from "codex" to "premium" and rewrites `primary` (and/or
+    `secondary`) to `null`. Naively skipping those events leaves the display
+    frozen at the last pre-cap reading (e.g. 93 %). We detect this marker
+    and synthesise a 100 % entry against the most recently seen `resets_at`
+    for that sub-limit.
+    """
     sessions_dir = CODEX_HOME / "sessions"
     if not sessions_dir.exists():
         return None
 
     # Cutoff keeps the file set bounded while still tolerating overnight /
-    # weekend gaps — if no session has been touched in a day, we have nothing
-    # meaningful to show anyway (and `reset_passed` zeros out expired windows
-    # in the UI regardless). The tail-read is ~20 ms per file so even 30 files
-    # stays fast.
+    # weekend gaps. Tail-read is ~20 ms per file so even 30 files stays fast.
     cutoff = time.time() - 24 * 3600
 
     files: list[tuple[float, str]] = []
@@ -73,10 +76,8 @@ def _latest_rate_limits() -> dict | None:
                     pass
     files.sort(reverse=True)
 
-    # Keep per-sub-limit buckets: resets_at → best snapshot dict
-    buckets: dict[str, dict] = {"primary": {}, "secondary": {}, "credits": {}}
-    meta: dict = {}
-
+    # Pass 1: gather every token_count event's rate_limits dict.
+    events: list[tuple[str, dict]] = []
     for _mt, fpath in files[:30]:
         for raw in _tail_lines(fpath):
             if not raw or b'"token_count"' not in raw:
@@ -93,21 +94,52 @@ def _latest_rate_limits() -> dict | None:
             rl = p.get("rate_limits") or {}
             if not rl:
                 continue
-            meta = {"limit_id":  rl.get("limit_id"),
-                    "plan_type": rl.get("plan_type")}
-            for key in ("primary", "secondary", "credits"):
-                sub = rl.get(key)
-                if not sub:
-                    continue
+            events.append((ev.get("timestamp", ""), rl))
+
+    # Process in event-timestamp order so an exhaustion flag is always
+    # applied to the same window it was observed in.
+    events.sort(key=lambda e: e[0])
+
+    buckets: dict[str, dict] = {"primary": {}, "secondary": {}, "credits": {}}
+    meta: dict = {}
+    # Per sub-limit, track the current window's (resets_at, max_pct_seen).
+    # When resets_at changes we start fresh — old window's 88 % must not
+    # leak into the new window's exhaustion check.
+    last_state: dict[str, tuple] = {}   # key -> (ra, max_pct)
+    # A sub-limit is counted as the exhaustion cause only if its last known
+    # value was already near the cap — otherwise `primary=null` alone would
+    # also promote an unrelated 15 % weekly to 100 %.
+    EXHAUSTION_PCT_FLOOR = 80.0
+
+    for _ts, rl in events:
+        meta = {"limit_id":  rl.get("limit_id"),
+                "plan_type": rl.get("plan_type")}
+        exhausted = rl.get("limit_id") == "premium"
+
+        for key in ("primary", "secondary", "credits"):
+            sub = rl.get(key)
+            if sub:
                 ra = sub.get("resets_at")
                 if ra is None:
                     continue
+                pct = sub.get("used_percent") or 0
                 bucket = buckets[key]
                 best = bucket.get(ra)
-                if best is None or (sub.get("used_percent") or 0) > (best.get("used_percent") or 0):
+                if best is None or pct > (best.get("used_percent") or 0):
                     bucket[ra] = sub
+                if key in ("primary", "secondary"):
+                    prev_ra, prev_max = last_state.get(key, (None, 0.0))
+                    last_state[key] = (ra, max(prev_max, pct) if prev_ra == ra else pct)
+            elif (exhausted and key in ("primary", "secondary")
+                  and key in last_state
+                  and last_state[key][1] >= EXHAUSTION_PCT_FLOOR):
+                # Codex blanked this sub-limit after capping out — the
+                # real value is 100 % of the last window we saw.
+                ra = last_state[key][0]
+                bucket = buckets[key]
+                prev = bucket.get(ra, {})
+                bucket[ra] = {**prev, "used_percent": 100.0, "resets_at": ra}
 
-    # Assemble the result: latest resets_at wins per sub-limit, max % within
     result: dict = {**meta}
     has_any = False
     for key, bucket in buckets.items():
