@@ -18,6 +18,10 @@ _TAIL_BYTES = 64 * 1024   # enough for ~hundreds of recent events
 _WS_EVENT_RE = re.compile(r'websocket event:\s*(\{.*\})\s*$')
 EXHAUSTION_PCT_FLOOR = 80.0
 
+SUB_LIMITS     = ("primary", "secondary", "credits")
+PCT_SUB_LIMITS = ("primary", "secondary")
+LIMIT_EXHAUSTED = "premium"
+
 
 def _tail_lines(fpath: str, tail_bytes: int = _TAIL_BYTES) -> list[bytes]:
     """Return the last `tail_bytes` worth of complete lines from a file.
@@ -37,8 +41,13 @@ def _tail_lines(fpath: str, tail_bytes: int = _TAIL_BYTES) -> list[bytes]:
     return lines
 
 
-def _aggregate_events(events: list) -> dict | None:
+def _aggregate_events(events: list[tuple[str, dict]]) -> dict | None:
     """Aggregate rate_limits events into a single freshest snapshot.
+
+    Event shape (contract both readers must produce):
+        (timestamp_str, {"limit_id", "plan_type",
+                         "primary"|"secondary"|"credits": {"resets_at",
+                                                           "used_percent", ...}})
 
     Multiple Codex sessions run concurrently; within a single window (same
     `resets_at`) usage is monotonically non-decreasing, so MAX(used_percent)
@@ -47,23 +56,20 @@ def _aggregate_events(events: list) -> dict | None:
     Exhaustion: when Codex hits the cap it flips `limit_id` to "premium"
     and nulls out `primary`/`secondary`. We synthesise 100 % against the
     last-known `resets_at` for that sub-limit — but only if its last
-    known pct was already ≥ 80 % (prevents a `secondary=null` event from
-    bumping an unrelated 15 % weekly to 100 %).
+    known pct was already ≥ EXHAUSTION_PCT_FLOOR (prevents a
+    `secondary=null` event from bumping an unrelated 15 % weekly to 100 %).
     """
     if not events:
         return None
     events.sort(key=lambda e: e[0])   # timestamp-asc
 
-    buckets: dict[str, dict] = {"primary": {}, "secondary": {}, "credits": {}}
-    meta: dict = {}
+    buckets: dict[str, dict] = {k: {} for k in SUB_LIMITS}
     last_state: dict[str, tuple] = {}   # key -> (resets_at, max_pct_this_window)
 
     for _ts, rl in events:
-        meta = {"limit_id":  rl.get("limit_id"),
-                "plan_type": rl.get("plan_type")}
-        exhausted = rl.get("limit_id") == "premium"
+        exhausted = rl.get("limit_id") == LIMIT_EXHAUSTED
 
-        for key in ("primary", "secondary", "credits"):
+        for key in SUB_LIMITS:
             sub = rl.get(key)
             if sub:
                 ra = sub.get("resets_at")
@@ -74,10 +80,10 @@ def _aggregate_events(events: list) -> dict | None:
                 best = bucket.get(ra)
                 if best is None or pct > (best.get("used_percent") or 0):
                     bucket[ra] = sub
-                if key in ("primary", "secondary"):
+                if key in PCT_SUB_LIMITS:
                     prev_ra, prev_max = last_state.get(key, (None, 0.0))
                     last_state[key] = (ra, max(prev_max, pct) if prev_ra == ra else pct)
-            elif (exhausted and key in ("primary", "secondary")
+            elif (exhausted and key in PCT_SUB_LIMITS
                   and key in last_state
                   and last_state[key][1] >= EXHAUSTION_PCT_FLOOR):
                 ra = last_state[key][0]
@@ -85,7 +91,9 @@ def _aggregate_events(events: list) -> dict | None:
                 prev = bucket.get(ra, {})
                 bucket[ra] = {**prev, "used_percent": 100.0, "resets_at": ra}
 
-    result: dict = {**meta}
+    last_rl = events[-1][1]
+    result: dict = {"limit_id":  last_rl.get("limit_id"),
+                    "plan_type": last_rl.get("plan_type")}
     has_any = False
     for key, bucket in buckets.items():
         if not bucket:
@@ -97,7 +105,7 @@ def _aggregate_events(events: list) -> dict | None:
     return result if has_any else None
 
 
-def _events_from_sqlite() -> list:
+def _events_from_sqlite() -> list[tuple[str, dict]]:
     """Read `codex.rate_limits` websocket events from logs_2.sqlite.
     Codex Desktop now writes rate_limits here on every turn; the old JSONL
     token_count records have become sporadic."""
@@ -136,29 +144,23 @@ def _events_from_sqlite() -> list:
         rl = data.get("rate_limits") or {}
         if not rl:
             continue
-        # Normalize SQLite event shape to the JSONL-compatible one used by
-        # _aggregate_events: rename `reset_at` → `resets_at`, synthesise
-        # `limit_id` from `limit_reached`.
         normalized: dict = {
             "plan_type": data.get("plan_type"),
-            "limit_id":  "premium" if rl.get("limit_reached") else "codex",
+            "limit_id":  LIMIT_EXHAUSTED if rl.get("limit_reached") else "codex",
+            "credits":   data.get("credits"),
         }
-        for key in ("primary", "secondary"):
+        for key in PCT_SUB_LIMITS:
             sub = rl.get(key)
-            if sub:
-                normalized[key] = {
-                    "used_percent":   sub.get("used_percent"),
-                    "window_minutes": sub.get("window_minutes"),
-                    "resets_at":      sub.get("reset_at"),
-                }
-            else:
-                normalized[key] = None
-        normalized["credits"] = data.get("credits")
+            normalized[key] = {
+                "used_percent":   sub.get("used_percent"),
+                "window_minutes": sub.get("window_minutes"),
+                "resets_at":      sub.get("reset_at"),
+            } if sub else None
         events.append((str(ts), normalized))
     return events
 
 
-def _events_from_jsonl() -> list:
+def _events_from_jsonl() -> list[tuple[str, dict]]:
     """Tail the last ~30 active JSONL sessions for `token_count` events.
     Fallback for older Codex versions that still wrote rate_limits there."""
     sessions_dir = CODEX_HOME / "sessions"
