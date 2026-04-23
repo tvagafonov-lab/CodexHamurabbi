@@ -1,21 +1,22 @@
 """
-CodexHamurabbi — fetch usage from Codex Desktop JSONL session files.
-Reads the most recent token_count event with rate_limits — no API call needed.
-Scans by file modification time so long-running sessions (started days ago)
-are always picked up correctly.
+CodexHamurabbi — fetch usage from Codex Desktop.
 
-Only reads the tail of each file (64 KB by default). token_count events are
-appended near the end of active sessions, so this avoids re-scanning the
-entire history on every fetch — critical for 20+ MB session files.
+Prefers `~/.codex/logs_2.sqlite` (the current storage — Codex Desktop emits
+`codex.rate_limits` websocket events there on every turn), and falls back
+to `~/.codex/sessions/*.jsonl` for older Codex versions that still wrote
+`event_msg/token_count` records. No network calls, no auth.
 """
-import json, os, time
+import json, os, re, sqlite3, time
 from pathlib import Path
 from datetime import datetime, timezone
 
-CODEX_HOME = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
-CACHE_FILE = CODEX_HOME / "hamurabbi_cache.json"
+CODEX_HOME   = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
+CACHE_FILE   = CODEX_HOME / "hamurabbi_cache.json"
+CODEX_SQLITE = CODEX_HOME / "logs_2.sqlite"
 
 _TAIL_BYTES = 64 * 1024   # enough for ~hundreds of recent events
+_WS_EVENT_RE = re.compile(r'websocket event:\s*(\{.*\})\s*$')
+EXHAUSTION_PCT_FLOOR = 80.0
 
 
 def _tail_lines(fpath: str, tail_bytes: int = _TAIL_BYTES) -> list[bytes]:
@@ -36,80 +37,26 @@ def _tail_lines(fpath: str, tail_bytes: int = _TAIL_BYTES) -> list[bytes]:
     return lines
 
 
-def _latest_rate_limits() -> dict | None:
-    """Walk JSONL session files and return the freshest rate_limits snapshot.
+def _aggregate_events(events: list) -> dict | None:
+    """Aggregate rate_limits events into a single freshest snapshot.
 
-    Multiple Codex sessions run concurrently and each session caches its own
-    copy of rate_limits (refreshed only when that session makes an API call).
-    Picking by event timestamp alone can surface a stale 3 % from a quiet
-    session and miss the 65 % one that a neighbour just observed.
+    Multiple Codex sessions run concurrently; within a single window (same
+    `resets_at`) usage is monotonically non-decreasing, so MAX(used_percent)
+    across events sharing that `resets_at` is the freshest observation.
 
-    Strategy: within a single rate-limit window (same `resets_at`), usage is
-    monotonically non-decreasing, so MAX(used_percent) among events sharing
-    that `resets_at` is the freshest observation.
-
-    Special case — limit exhaustion: when Codex hits the cap it flips
-    `limit_id` from "codex" to "premium" and rewrites `primary` (and/or
-    `secondary`) to `null`. Naively skipping those events leaves the display
-    frozen at the last pre-cap reading (e.g. 93 %). We detect this marker
-    and synthesise a 100 % entry against the most recently seen `resets_at`
-    for that sub-limit.
+    Exhaustion: when Codex hits the cap it flips `limit_id` to "premium"
+    and nulls out `primary`/`secondary`. We synthesise 100 % against the
+    last-known `resets_at` for that sub-limit — but only if its last
+    known pct was already ≥ 80 % (prevents a `secondary=null` event from
+    bumping an unrelated 15 % weekly to 100 %).
     """
-    sessions_dir = CODEX_HOME / "sessions"
-    if not sessions_dir.exists():
+    if not events:
         return None
-
-    # Cutoff keeps the file set bounded while still tolerating overnight /
-    # weekend gaps. Tail-read is ~20 ms per file so even 30 files stays fast.
-    cutoff = time.time() - 24 * 3600
-
-    files: list[tuple[float, str]] = []
-    for root, _dirs, names in os.walk(str(sessions_dir)):
-        for fname in names:
-            if fname.endswith(".jsonl"):
-                fpath = os.path.join(root, fname)
-                try:
-                    mt = os.path.getmtime(fpath)
-                    if mt >= cutoff:
-                        files.append((mt, fpath))
-                except OSError:
-                    pass
-    files.sort(reverse=True)
-
-    # Pass 1: gather every token_count event's rate_limits dict.
-    events: list[tuple[str, dict]] = []
-    for _mt, fpath in files[:30]:
-        for raw in _tail_lines(fpath):
-            if not raw or b'"token_count"' not in raw:
-                continue
-            try:
-                ev = json.loads(raw)
-            except ValueError:
-                continue
-            if ev.get("type") != "event_msg":
-                continue
-            p = ev.get("payload") or {}
-            if p.get("type") != "token_count":
-                continue
-            rl = p.get("rate_limits") or {}
-            if not rl:
-                continue
-            events.append((ev.get("timestamp", ""), rl))
-
-    # Process in event-timestamp order so an exhaustion flag is always
-    # applied to the same window it was observed in.
-    events.sort(key=lambda e: e[0])
+    events.sort(key=lambda e: e[0])   # timestamp-asc
 
     buckets: dict[str, dict] = {"primary": {}, "secondary": {}, "credits": {}}
     meta: dict = {}
-    # Per sub-limit, track the current window's (resets_at, max_pct_seen).
-    # When resets_at changes we start fresh — old window's 88 % must not
-    # leak into the new window's exhaustion check.
-    last_state: dict[str, tuple] = {}   # key -> (ra, max_pct)
-    # A sub-limit is counted as the exhaustion cause only if its last known
-    # value was already near the cap — otherwise `primary=null` alone would
-    # also promote an unrelated 15 % weekly to 100 %.
-    EXHAUSTION_PCT_FLOOR = 80.0
+    last_state: dict[str, tuple] = {}   # key -> (resets_at, max_pct_this_window)
 
     for _ts, rl in events:
         meta = {"limit_id":  rl.get("limit_id"),
@@ -133,8 +80,6 @@ def _latest_rate_limits() -> dict | None:
             elif (exhausted and key in ("primary", "secondary")
                   and key in last_state
                   and last_state[key][1] >= EXHAUSTION_PCT_FLOOR):
-                # Codex blanked this sub-limit after capping out — the
-                # real value is 100 % of the last window we saw.
                 ra = last_state[key][0]
                 bucket = buckets[key]
                 prev = bucket.get(ra, {})
@@ -150,6 +95,121 @@ def _latest_rate_limits() -> dict | None:
         result[key] = bucket[latest_ra]
         has_any = True
     return result if has_any else None
+
+
+def _events_from_sqlite() -> list:
+    """Read `codex.rate_limits` websocket events from logs_2.sqlite.
+    Codex Desktop now writes rate_limits here on every turn; the old JSONL
+    token_count records have become sporadic."""
+    if not CODEX_SQLITE.exists():
+        return []
+    try:
+        # Read-only URI avoids blocking the writer process.
+        conn = sqlite3.connect(
+            f"file:{CODEX_SQLITE.as_posix()}?mode=ro", uri=True, timeout=3.0)
+    except sqlite3.Error:
+        return []
+    try:
+        cutoff = int(time.time()) - 24 * 3600
+        rows = conn.execute(
+            "SELECT ts, feedback_log_body FROM logs "
+            "WHERE ts >= ? AND feedback_log_body LIKE '%codex.rate_limits%' "
+            "ORDER BY ts ASC",
+            (cutoff,)
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        conn.close()
+
+    events: list[tuple[str, dict]] = []
+    for ts, body in rows:
+        if not body:
+            continue
+        m = _WS_EVENT_RE.search(body)
+        if not m:
+            continue
+        try:
+            data = json.loads(m.group(1))
+        except ValueError:
+            continue
+        rl = data.get("rate_limits") or {}
+        if not rl:
+            continue
+        # Normalize SQLite event shape to the JSONL-compatible one used by
+        # _aggregate_events: rename `reset_at` → `resets_at`, synthesise
+        # `limit_id` from `limit_reached`.
+        normalized: dict = {
+            "plan_type": data.get("plan_type"),
+            "limit_id":  "premium" if rl.get("limit_reached") else "codex",
+        }
+        for key in ("primary", "secondary"):
+            sub = rl.get(key)
+            if sub:
+                normalized[key] = {
+                    "used_percent":   sub.get("used_percent"),
+                    "window_minutes": sub.get("window_minutes"),
+                    "resets_at":      sub.get("reset_at"),
+                }
+            else:
+                normalized[key] = None
+        normalized["credits"] = data.get("credits")
+        events.append((str(ts), normalized))
+    return events
+
+
+def _events_from_jsonl() -> list:
+    """Tail the last ~30 active JSONL sessions for `token_count` events.
+    Fallback for older Codex versions that still wrote rate_limits there."""
+    sessions_dir = CODEX_HOME / "sessions"
+    if not sessions_dir.exists():
+        return []
+
+    cutoff = time.time() - 24 * 3600
+    files: list[tuple[float, str]] = []
+    for root, _dirs, names in os.walk(str(sessions_dir)):
+        for fname in names:
+            if fname.endswith(".jsonl"):
+                fpath = os.path.join(root, fname)
+                try:
+                    mt = os.path.getmtime(fpath)
+                    if mt >= cutoff:
+                        files.append((mt, fpath))
+                except OSError:
+                    pass
+    files.sort(reverse=True)
+
+    events: list[tuple[str, dict]] = []
+    for _mt, fpath in files[:30]:
+        for raw in _tail_lines(fpath):
+            if not raw or b'"token_count"' not in raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            if ev.get("type") != "event_msg":
+                continue
+            p = ev.get("payload") or {}
+            if p.get("type") != "token_count":
+                continue
+            rl = p.get("rate_limits") or {}
+            if not rl:
+                continue
+            events.append((ev.get("timestamp", ""), rl))
+    return events
+
+
+def _latest_rate_limits() -> dict | None:
+    """Freshest rate_limits snapshot, merged from both sources.
+
+    Codex writes rate_limits to both `logs_2.sqlite` (websocket events, every
+    turn) and the legacy JSONL session files (token_count events, sporadic
+    across builds). Freshness drifts between the two depending on Codex
+    version, so we concatenate both event streams and let `_aggregate_events`
+    pick MAX-per-resets_at across everything — whichever source saw the
+    highest usage within the current window wins."""
+    return _aggregate_events(_events_from_sqlite() + _events_from_jsonl())
 
 
 def fetch_and_save() -> dict:
