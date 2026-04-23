@@ -13,6 +13,7 @@ fetch keeps us current.
 import json, os, urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
+from urllib.error import URLError
 
 CODEX_HOME = Path(os.environ.get("USERPROFILE", Path.home())) / ".codex"
 CACHE_FILE = CODEX_HOME / "hamurabbi_cache.json"
@@ -41,15 +42,32 @@ def _fetch_usage() -> dict | None:
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
-    except Exception:
+    except (URLError, TimeoutError, ValueError, OSError):
         return None
+
+
+def _write_if_changed(result: dict) -> None:
+    """Skip the write (and mtime bump) when only `fetched_at` differs.
+    The overlay re-reads on mtime change; unconditional writes force a
+    repaint every poll even when nothing moved."""
+    payload = json.dumps(result, indent=2)
+    try:
+        prev = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        prev = None
+    if isinstance(prev, dict):
+        a = {k: v for k, v in result.items() if k != "fetched_at"}
+        b = {k: v for k, v in prev.items()   if k != "fetched_at"}
+        if a == b:
+            return
+    CACHE_FILE.write_text(payload, encoding="utf-8")
 
 
 def fetch_and_save() -> dict:
     data = _fetch_usage()
     if data is None:
         result = {"error": "no_data"}
-        CACHE_FILE.write_text(json.dumps(result), encoding="utf-8")
+        _write_if_changed(result)
         return result
 
     rl  = data.get("rate_limit") or {}
@@ -63,14 +81,14 @@ def fetch_and_save() -> dict:
         "wd_pct":   sec.get("used_percent", 0),
         "wd_reset": sec.get("reset_at"),
         "cr_pct":   0,
-        "cr_used":  0 if cr.get("balance") in (None, "") else float(cr.get("balance") or 0),
+        "cr_used":  float(cr.get("balance") or 0),
         "cr_limit": 0,
         "cr_curr":  "",
         "plan":     data.get("plan_type", ""),
         "fetched_at": datetime.now(tz=timezone.utc).isoformat(),
     }
 
-    CACHE_FILE.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    _write_if_changed(result)
     return result
 
 
