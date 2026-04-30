@@ -144,6 +144,9 @@ Shows 5h window, weekly limit, Sonnet usage, Design, and extra credits.
 **Tray icon doesn't appear**
 → Windows 11 hides new tray icons by default. Open **Settings → Personalization → Taskbar → Other system tray icons** and enable the CodexHamurabbi entry.
 
+**Tray icon disappears after I kill / restart the overlay**
+→ Known Win11 quirk. The shell caches `(ExecutablePath, GUID)` pairs for `NotifyIcon` registrations and silently rejects re-registration of the same GUID inside an already-running session. Fix: **sign out of Windows and sign back in**. Both autostart shortcuts will then start in a clean shell state and register their tray icons cleanly. Avoid `Stop-Process` / Task-Manager-killing the overlay during a session — toggle out of tray via right-click → "Exit tray" instead.
+
 **"Python not found"**
 → Reinstall Python from [python.org](https://python.org/downloads/) and check **"Add Python to PATH"**.
 
