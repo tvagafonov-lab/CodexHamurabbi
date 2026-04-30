@@ -1,7 +1,7 @@
 # CodexHamurabbi
 
-> **The only usage monitor built specifically for the Codex Desktop app (Windows).**  
-> No API calls, no auth tokens — reads directly from Codex's local session files.
+> **The only usage monitor built specifically for the Codex Desktop app (Windows).**
+> No password, no API key — uses the access token Codex Desktop already caches locally.
 
 Compact always-on-top overlay that shows your real-time **Codex usage stats** — 5-hour window, weekly limit, and extra credits — directly on your desktop.
 
@@ -19,12 +19,13 @@ Compact always-on-top overlay that shows your real-time **Codex usage stats** �
 
 Color-coded progress bars / rings: green → yellow → red as limits approach.
 
-**Three modes:**
+**Four modes:**
 - **Full** — progress bars + labels + reset countdowns
 - **Compact** — icon + % + time to reset (165 px wide)
 - **Dock** — donut-ring strip (44 px tall) that snaps above the Windows taskbar
+- **Tray** — single status ring in the system tray; left-click for hover card, right-click for menu
 
-Double-click the header to toggle full ↔ compact. Right-click → ⊞ Dock mode to go minimal.
+Double-click the header to toggle full ↔ compact. Right-click for the full menu (modes, opacity, language, %).
 
 ---
 
@@ -48,9 +49,9 @@ Want to add your language? Edit [`i18n.py`](i18n.py) — copy any block, add a n
 
 - **Windows 10 / 11**
 - **Python 3.10+** — [python.org/downloads](https://python.org/downloads/) *(check "Add Python to PATH" during install)*
-- **Codex Desktop app** — any paid plan
+- **Codex Desktop app** — installed, signed in, and run at least once (any paid plan)
 
-No external Python packages required — uses stdlib `json`, `glob`, and `tkinter` only.
+`install.bat` will pip-install `pystray` + `Pillow` (for tray-mode rendering).
 
 ---
 
@@ -58,23 +59,25 @@ No external Python packages required — uses stdlib `json`, `glob`, and `tkinte
 
 ### 1. Download
 
-Click **Code → Download ZIP**, extract anywhere.
-
-Or clone:
+Click **Code → Download ZIP**, extract anywhere. Or clone:
 ```
 git clone https://github.com/tvagafonov-lab/CodexHamurabbi.git
 cd CodexHamurabbi
 ```
 
-### 2. Run
+### 2. Install
 
-Double-click **`start_monitor.bat`**
+Double-click **`install.bat`** — installs dependencies and creates a Windows-startup shortcut so the overlay launches automatically on every login.
 
-That's it. No setup wizard, no API keys. The overlay reads from:
+### 3. Run now
+
+Double-click **`start_monitor.bat`** to launch immediately without waiting for the next login.
+
+No setup wizard, no API keys. The overlay reads Codex Desktop's cached access token from:
 ```
-%USERPROFILE%\.codex\sessions\YYYY\MM\DD\*.jsonl
+%USERPROFILE%\.codex\auth.json
 ```
-which Codex Desktop writes automatically during every session.
+and queries the same backend endpoint Codex Desktop itself uses, so the numbers match the Codex UI exactly.
 
 ---
 
@@ -95,21 +98,15 @@ Settings saved to `%USERPROFILE%\.codex\hamurabbi_settings.json`.
 
 ## How it works
 
-Codex Desktop writes session events to local JSONL files:
-```
-%USERPROFILE%\.codex\sessions\YYYY\MM\DD\<session-id>.jsonl
-```
-
-Each file contains `event_msg` events. CodexHamurabbi scans these files, finds the most recent `token_count` event, and reads the `rate_limits` object — the same limits displayed in the Codex app settings. No network requests. No authentication.
+Codex Desktop signs you in via OAuth and stores the resulting access token in `~/.codex/auth.json`. CodexHamurabbi reads that file, sends a single authenticated `GET https://chatgpt.com/backend-api/codex/usage` request every 3 minutes, and surfaces:
 
 ```
-rate_limits:
-  primary    → 5-hour rolling window (used_percent, resets_at)
-  secondary  → weekly total (used_percent, resets_at)
-  credits    → extra credits (used_credits, monthly_limit)
+rate_limit.primary_window    → 5-hour rolling window (used_percent, reset_at)
+rate_limit.secondary_window  → weekly total (used_percent, reset_at)
+credits                      → extra credits balance
 ```
 
-The overlay watches session files for changes (checks every 5 s) and re-reads immediately when Codex writes new token counts — no manual refresh needed.
+Codex Desktop refreshes the token in place, so as long as Desktop is installed and you're signed in, CodexHamurabbi stays current with no manual maintenance. Sign out of Desktop and the overlay shows `⚠ no_data` until you sign back in.
 
 ---
 
@@ -118,10 +115,11 @@ The overlay watches session files for changes (checks every 5 s) and re-reads im
 ```
 CodexHamurabbi/
 ├── codex_monitor.py   # Main overlay (tkinter)
-├── fetch_codex.py     # Reads rate_limits from JSONL session files
+├── fetch_codex.py     # HTTP fetch from chatgpt.com/backend-api/codex/usage
 ├── i18n.py            # Translations — edit to add a language
-├── start_monitor.bat  # Launch overlay
-└── requirements.txt   # (empty — no dependencies)
+├── install.bat        # One-click install + startup shortcut
+├── start_monitor.bat  # Launch overlay (no install)
+└── requirements.txt   # pystray + Pillow (for tray mode)
 ```
 
 ---
@@ -130,27 +128,30 @@ CodexHamurabbi/
 
 Check out the sibling project:
 
-**[JeanClaudeCombien](https://github.com/tvagafonov-lab/JeanClaudeCombien)** — same idea for Claude Desktop.  
+**[JeanClaudeCombien](https://github.com/tvagafonov-lab/JeanClaudeCombien)** — same idea for Claude.
 Shows 5h window, weekly limit, Sonnet usage, Design, and extra credits.
 
 ---
 
 ## Troubleshooting
 
-**Window not visible**  
+**Window not visible**
 → Delete `%USERPROFILE%\.codex\hamurabbi_settings.json` and restart — reappears bottom-right.
 
-**Shows 0% on all bars**  
-→ Make sure Codex Desktop has run at least one session. The overlay scans all sessions from the past 8 days.
+**Shows `⚠ no_data`**
+→ Codex Desktop is not signed in (or `~/.codex/auth.json` is missing). Open Codex Desktop and sign in.
 
-**"Python not found"**  
+**Tray icon doesn't appear**
+→ Windows 11 hides new tray icons by default. Open **Settings → Personalization → Taskbar → Other system tray icons** and enable the CodexHamurabbi entry.
+
+**"Python not found"**
 → Reinstall Python from [python.org](https://python.org/downloads/) and check **"Add Python to PATH"**.
 
 ---
 
 ## Privacy
 
-All data is local. No outbound requests. No telemetry.
+The only outbound request is to `chatgpt.com/backend-api/codex/usage` — the same endpoint Codex Desktop uses for its own UI. No telemetry, no third-party services. The access token never leaves your machine except in that one request.
 
 ---
 

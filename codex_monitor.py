@@ -303,8 +303,6 @@ class CodexHamurabbi:
         self.root             = tk.Tk()
         self._body            = None
         self._rows_widgets    = []
-        self._known_mtime     = 0.0   # latest mtime seen across all session files
-        self._last_fetch_time = 0.0
         self._refresh_id      = None
         # Tray state. Entering tray is deferred until the first _bg_fetch
         # lands (or a 5 s safety timer) so the icon doesn't bake in 0 %.
@@ -622,17 +620,15 @@ class CodexHamurabbi:
     def _bg_fetch(self):
         def run():
             err = None
+            result = None
             try:
-                fetch_codex.fetch_and_save()
+                result = fetch_codex.fetch_and_save()
             except Exception as e:
                 err = type(e).__name__
-            # Keep _known_mtime in sync so the next watcher tick doesn't
-            # decide the content we just pulled is already stale.
-            try:
-                self._known_mtime = self._find_latest_session_mtime()
-            except Exception:
-                pass
-            if err:
+            if isinstance(result, dict) and result.get("error"):
+                self.root.after(0, lambda e=result["error"]:
+                                self._upd_var.set(f"⚠ {e}"))
+            elif err:
                 self.root.after(0, lambda: self._upd_var.set(f"⚠ {err}"))
             else:
                 self.root.after(0, self._refresh_ui)
@@ -832,58 +828,16 @@ class CodexHamurabbi:
             except Exception: pass
             self._hover_card = None
 
-    def _find_latest_session_mtime(self) -> float:
-        """Cheaply scan session dirs for the newest JSONL mtime."""
-        sessions_dir = CODEX_HOME / "sessions"
-        cutoff = time.time() - 8 * 24 * 3600
-        latest = 0.0
-        try:
-            for root, _dirs, files in os.walk(str(sessions_dir)):
-                for fname in files:
-                    if fname.endswith(".jsonl"):
-                        try:
-                            mt = os.path.getmtime(os.path.join(root, fname))
-                            if mt >= cutoff and mt > latest:
-                                latest = mt
-                        except OSError:
-                            pass
-        except Exception:
-            pass
-        return latest
-
-    def _watch_sessions(self):
-        """Every 2 s: scan session files in a background thread; re-fetch if changed.
-        In-process fetch runs in ~500 ms, so a 3 s cooldown is plenty."""
-        def check():
-            try:
-                mt = self._find_latest_session_mtime()
-                if mt > self._known_mtime:
-                    now = time.time()
-                    if now - self._last_fetch_time >= 3:
-                        self._known_mtime     = mt
-                        self._last_fetch_time = now
-                        self.root.after(0, self._bg_fetch)
-            except Exception:
-                pass
-        threading.Thread(target=check, daemon=True).start()
-        self.root.after(2_000, self._watch_sessions)
-
     def _schedule_bg_fetch(self):
-        """Initial fetch on startup, then hand off to file watcher.
-        `_bg_fetch`'s thread also primes `_known_mtime`, so we don't need a
-        separate warm-up — and first paint isn't blocked by the disk walk."""
+        """First fetch on startup, then a periodic refresh every
+        FALLBACK_FETCH_MS. The HTTP backend gives authoritative current
+        values, so we don't need a file-mtime watcher anymore."""
         self._bg_fetch()
-        self.root.after(2_000, self._watch_sessions)
-        self.root.after(FALLBACK_FETCH_MS, self._periodic_fallback)
+        self.root.after(FALLBACK_FETCH_MS, self._periodic_fetch)
 
-    def _periodic_fallback(self):
-        """Force a fetch every few minutes even when no Codex activity — keeps
-        the `⟳` timestamp fresh and catches any file changes the mtime watcher
-        may have missed. Skipped if the watcher already fetched recently."""
-        if time.time() - self._last_fetch_time >= 120:
-            self._last_fetch_time = time.time()
-            self._bg_fetch()
-        self.root.after(FALLBACK_FETCH_MS, self._periodic_fallback)
+    def _periodic_fetch(self):
+        self._bg_fetch()
+        self.root.after(FALLBACK_FETCH_MS, self._periodic_fetch)
 
     # ── Drag ──────────────────────────────────────────────────────────────────
     def _drag_start(self, e): self._ox, self._oy = e.x, e.y
